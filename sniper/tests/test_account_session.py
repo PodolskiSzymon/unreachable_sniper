@@ -358,3 +358,42 @@ def test_wait_for_login_timeout(tmp_path, monkeypatch):
         return False
     monkeypatch.setattr(account, "refresh_and_check", never)
     assert asyncio.run(account.wait_for_login(timeout=0.1)) is False
+
+
+def test_passive_check_name_wins_over_stale_login_button(tmp_path):
+    """Strona nieprzerysowana po zalogowaniu („Zaloguj się” wciąż widać), ale banners zna konto -> zalogowany."""
+    import asyncio
+    account = acc.VintedAccount(_cfg(tmp_path), tmp_path)
+    body = '{"banners":{"x":{"extra":{"invite_url":"https://www.vinted.pl/invite/koala_test/tok"}}},"code":0}'
+    account.page = GuestPage(login_visible=True)
+    account.page._banners = {"status": 200, "body": body}
+    account.page.goto_urls.append("https://www.vinted.pl/")
+    assert asyncio.run(account.refresh_and_check(navigate=False)) is True and account.username == "koala_test"
+
+
+def test_passive_check_token_change_triggers_one_reload(tmp_path):
+    """Nowy access_token_web = logowanie zakończone -> jedno sprawdzenie z przeładowaniem (strona mogła nie
+    przerysować nagłówka albo logowanie było w innej karcie)."""
+    import asyncio
+    account = acc.VintedAccount(_cfg(tmp_path), tmp_path)
+    account.page = GuestPage(login_visible=True)
+    account.page.goto_urls.append("https://www.vinted.pl/")
+    account.context = _Ctx([{"name": "access_token_web", "value": "GOSC"}])
+    assert asyncio.run(account.refresh_and_check(navigate=False)) is False      # gość - linia bazowa tokenu
+    assert account.page.goto_urls == ["https://www.vinted.pl/"]
+    account.context = _Ctx([{"name": "access_token_web", "value": "KONTO"}])   # po zalogowaniu
+    asyncio.run(account.refresh_and_check(navigate=False))
+    assert account.page.goto_urls[-1] == acc.HOME_URL and len(account.page.goto_urls) == 2
+
+
+def test_passive_check_logs_reason_once_a_minute(tmp_path, caplog):
+    import asyncio
+    import logging
+    account = acc.VintedAccount(_cfg(tmp_path), tmp_path)
+    account.page = GuestPage(login_visible=True)
+    account.page.goto_urls.append("https://www.vinted.pl/")
+    with caplog.at_level(logging.INFO, logger="sniper.account"):
+        asyncio.run(account.refresh_and_check(navigate=False))
+        asyncio.run(account.refresh_and_check(navigate=False))
+    lines = [r.getMessage() for r in caplog.records if "Czekam na logowanie" in r.getMessage()]
+    assert len(lines) == 1 and "„Zaloguj się” na stronie: TAK" in lines[0] and "token konta: BRAK" in lines[0]

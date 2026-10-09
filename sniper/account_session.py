@@ -162,6 +162,8 @@ class VintedAccount:
         self.page = None
         self.username = None
         self.logged_in = False
+        self._last_token = None                     # do wykrycia końca logowania (zmiana access_token_web)
+        self._last_diag = float("-inf")             # ostatnia linia diagnostyczna przy czekaniu na logowanie
 
     async def start(self):
         """Uruchamia przeglądarkę i sprawdza sesję. Niezalogowany -> okno ZOSTAJE na stronie głównej do logowania."""
@@ -239,6 +241,8 @@ class VintedAccount:
         (przeładowanie w trakcie wpisywania hasła przerwałoby logowanie).
         """
         quiet = not navigate
+        if not navigate:
+            return await self._passive_check()
         if navigate:
             await self.page.goto(HOME_URL, wait_until="domcontentloaded")
             if await self._stuck_on_session_refresh():
@@ -246,10 +250,6 @@ class VintedAccount:
                             "ponownie w oknie bota (albo: zatrzymaj program i python -m sniper.account_session "
                             "--login, czyści profil).")
                 self.username = None
-                return False
-        else:
-            if self.is_session_refresh(self.page.url) or await self._login_button_visible():
-                self.username = None                    # gość / formularz logowania - bez zapytań do Vinted
                 return False
         result = await self.page.evaluate(_BANNERS_FETCH, BANNERS_PATH)
         status, body = result.get("status"), result.get("body") or ""
@@ -281,6 +281,59 @@ class VintedAccount:
             return False
         log.info("[KONTO] Sesja aktywna (banner bez nazwy, ale bez „Zaloguj się” i z tokenem konta).")
         return True
+
+    async def _account_token(self):
+        if self.context is None:
+            return None
+        try:
+            cookies = await self.context.cookies("https://www.vinted.pl")
+        except Exception:
+            return None
+        return next((c.get("value") for c in cookies if c.get("name") == "access_token_web"), None)
+
+    async def _passive_check(self):
+        """Sprawdzenie BEZ przeładowania strony (czekamy, aż zalogujesz się ręcznie).
+
+        1. /api/v2/banners z obecnej strony - nazwa konta = zalogowany.
+        2. Brak widocznego „Zaloguj się” + ciastko access_token_web = zalogowany.
+        3. Ciastko access_token_web ZMIENIŁO się od poprzedniego sprawdzenia = logowanie się zakończyło (Vinted
+           wystawia nowy token) -> teraz bezpiecznie jedno sprawdzenie z przeładowaniem strony. Pomaga, gdy strona
+           po zalogowaniu nie przerysowała nagłówka albo logowałeś się w innej karcie okna bota.
+        Co ~60 s linia w logu z powodem, dlaczego jeszcze nie widzę logowania.
+        """
+        import time as _t
+        token = await self._account_token()
+        token_changed = self._last_token is not None and token and token != self._last_token
+        self._last_token = token
+        if token_changed:
+            log.info("[KONTO] Nowy token konta w przeglądarce (koniec logowania?) - sprawdzam z przeładowaniem strony.")
+            return await self.refresh_and_check(navigate=True)
+
+        url = self.page.url or ""
+        status, name, login_button = None, None, None
+        if "vinted." in url and not self.is_session_refresh(url):
+            result = await self.page.evaluate(_BANNERS_FETCH, BANNERS_PATH)
+            status, body = result.get("status"), result.get("body") or ""
+            _, name = detect_banners(body)
+            if name:
+                self.username = name
+                log.info("[KONTO] Zalogowany jako: %s", name)
+                return True
+            if status == 200 and '"code":0' in body:
+                login_button = await self._login_button_visible()
+                if not login_button and token:
+                    log.info("[KONTO] Sesja aktywna (banner bez nazwy, bez „Zaloguj się”, z tokenem konta).")
+                    return True
+        self.username = None
+        now = _t.monotonic()
+        if now - self._last_diag >= 60:
+            self._last_diag = now
+            log.info("[KONTO] Czekam na logowanie w oknie bota - jeszcze nie widzę sesji: URL %s | banners %s | "
+                     "„Zaloguj się” na stronie: %s | token konta: %s | kart w oknie bota: %d",
+                     url[:80] or "-", status if status is not None else "nie sprawdzono (strona spoza Vinted)",
+                     {True: "TAK", False: "nie", None: "?"}[login_button], "jest" if token else "BRAK",
+                     len(getattr(self.context, "pages", []) or []))
+        return False
 
     async def _login_button_visible(self):
         """True = na stronie widać „Zaloguj się” (gość). None = nie da się sprawdzić."""
