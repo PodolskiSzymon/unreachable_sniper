@@ -51,7 +51,7 @@ class FakeAccount:
         await asyncio.sleep(self.pay_delay)
         return "zapytanie POST .../checkout/payment"
 
-    async def refresh_and_check(self, navigate=True):
+    async def refresh_and_check(self, navigate=True, **kw):
         self.calls.append("check" if navigate else "check-passive")
         return True
 
@@ -317,3 +317,23 @@ class BodyNotifier(FakeNotifier):
 
     def notify_text(self, subject, body):
         self.alerts.append((subject, body))
+
+
+def test_watch_between_keepalives_detects_logout_quickly(tmp_path):
+    """Wylogowanie (np. F5 pokazuje „Zaloguj się”) wykryte w ~1-2 min, a nie po 15-25 min do podtrzymania."""
+    from sniper.config import DelayConfig
+    account = FakeAccount()
+    buyer, _ = make_buyer(tmp_path, account=account)
+    buyer.delays = DelayConfig(session_watch_s=(0.01, 0.01))
+    buyer.ready = True
+    calls = []
+
+    async def refresh(navigate=True, **kw):
+        calls.append(navigate)
+        return len(calls) < 3                      # 2 szybkie OK, trzecie: brak sesji
+    account.refresh_and_check = refresh
+
+    async def scenario():
+        await asyncio.wait_for(buyer._wait_watching(3600), timeout=5)   # wraca od razu po wykryciu
+    asyncio.run(scenario())
+    assert calls == [False, False, False]                               # bez przeładowania strony

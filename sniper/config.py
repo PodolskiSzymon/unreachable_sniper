@@ -302,6 +302,9 @@ class DelayConfig:
     # Co ile wejść (losowo z zakresu) dłuższa pauza i ile MINUT trwa (zamiast zwykłej przerwy).
     long_pause_every: tuple = _env_range("SCRAPER_LONG_PAUSE_EVERY", (12.0, 18.0))
     long_pause_min: tuple = _env_range("SCRAPER_LONG_PAUSE_MIN", (40.0, 60.0))
+    # Między podtrzymaniami: szybkie sprawdzenie BEZ przeładowania strony co tyle SEKUND - wylogowanie widać od razu,
+    # a nie dopiero przy następnym podtrzymaniu (było: do 25 min „AKTYWNY” po wylogowaniu, test 2026-10-09).
+    session_watch_s: tuple = _env_range("SCRAPER_SESSION_WATCH_S", (60.0, 120.0))
     # Czekanie na Twoje ręczne logowanie w oknie bota: sprawdzanie co tyle SEKUND (bez przeładowania strony).
     login_check_s: tuple = _env_range("SCRAPER_LOGIN_CHECK_S", (5.0, 10.0))
     # Odśwież sesję (wejście na stronę) na tyle MINUT przed wygaśnięciem tokenu dostępu (exp z JWT, żyje ~1 h).

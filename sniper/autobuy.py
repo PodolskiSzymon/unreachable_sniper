@@ -242,6 +242,28 @@ class AutoBuyer:
         if self.notifier is not None and hasattr(self.notifier, "notify_text"):
             self.notifier.notify_text(subject, body)
 
+    async def _quick_alive(self):
+        """Szybkie sprawdzenie sesji BEZ przeładowania strony. Błąd techniczny = „nie wiem” = True (pełne sprawdzenie
+        i tak przyjdzie przy podtrzymaniu)."""
+        async with self._lock:
+            try:
+                return await self.account.refresh_and_check(navigate=False, reload_on_token_change=False)
+            except Exception:
+                return True
+
+    async def _wait_watching(self, delay):
+        """Czeka do podtrzymania, co 1-2 min sprawdzając sesję bez przeładowania. Brak sesji -> wraca od razu."""
+        import time as _t
+        deadline = _t.monotonic() + delay
+        while self.ready:
+            left = deadline - _t.monotonic()
+            if left <= 0:
+                return
+            await asyncio.sleep(min(left, DelayConfig.pick(self.delays.session_watch_s)))
+            if _t.monotonic() < deadline and not await self._quick_alive():
+                log.warning("[AUTO-BUY] Szybkie sprawdzenie: nie widzę sesji konta - sprawdzam dokładnie teraz.")
+                return
+
     async def _keepalive(self):
         pacer = KeepalivePacer(self.delays)
         while True:
@@ -253,7 +275,7 @@ class AutoBuyer:
                     delay = await planner(pacer) if planner else pacer.next_seconds()
                 except Exception:
                     delay = pacer.next_seconds()
+                await self._wait_watching(delay)
             else:
-                delay = DelayConfig.pick(self.delays.login_check_s)
-            await asyncio.sleep(delay)
+                await asyncio.sleep(DelayConfig.pick(self.delays.login_check_s))
             await self.check_session()
