@@ -38,6 +38,7 @@ class AutoBuyer:
         self._queued = set()
         self._lock = asyncio.Lock()          # przeglądarka: zakup i podtrzymanie sesji nigdy naraz
         self._tasks = []
+        self._session_note = ""             # opis z dziennika sesji (logs/session_events.csv) do maila
         self.stats = {"submitted": 0, "bought": 0, "unconfirmed": 0, "skipped": 0, "error": 0}
 
     # ------------------------------------------------------------------ start / stop
@@ -57,6 +58,11 @@ class AutoBuyer:
         logged = getattr(self.account, "logged_in", None)
         if logged is None:
             logged = bool(getattr(self.account, "username", None))
+        if logged:
+            self._journal("up", self._username(), "start programu")
+        else:
+            self._session_note = self._journal(
+                "down", "start programu: profil niezalogowany - " + (getattr(self.account, "last_reason", "") or "?"))
         self._tasks = [asyncio.create_task(self._worker(), name="autobuy-worker"),
                        asyncio.create_task(self._keepalive(), name="autobuy-keepalive")]
         if not logged:
@@ -190,11 +196,18 @@ class AutoBuyer:
                 return
         if alive and not self.ready:
             self.ready = True
+            note = self._journal("up", self._username(), "wykryto ponowne zalogowanie")
             log.warning("[AUTO-BUY] Sesja konta wróciła - auto-zakup WZNOWIONY.")
             self._alert("[Sniper] Sesja konta Vinted wróciła - auto-zakup wznowiony",
-                        "Sesja konta działa ponownie, auto-zakup jest wznowiony.")
+                        "Sesja konta działa ponownie, auto-zakup jest wznowiony.\n\n" + (note or ""))
         elif not alive and self.ready:
             self.ready = False
+            token_left = None
+            try:
+                token_left = await self.account.token_expires_in() if hasattr(self.account, "token_expires_in") else None
+            except Exception:
+                pass
+            self._session_note = self._journal("down", getattr(self.account, "last_reason", "") or "?", token_left)
             log.error("[AUTO-BUY] Sesja konta padła - auto-zakup WSTRZYMANY (okazje idą zwykłym mailem). "
                       "Zaloguj się ponownie w otwartym oknie Chrome bota - bot wykryje to sam.")
             try:
@@ -208,7 +221,22 @@ class AutoBuyer:
                     "Zwiadowca nie jest zalogowany na Twoje konto Vinted, więc NIE kupuje okazji "
                     "(przychodzą zwykłym mailem). Okno Chrome bota zostaje otwarte na stronie Vinted.\n\n"
                     "Naprawa: zaloguj się RĘCZNIE w tym oknie (e-mail + hasło Vinted, nie przez Google). "
-                    "Bot sprawdza co kilka sekund i sam wznowi auto-zakup - bez restartu programu.")
+                    "Bot sprawdza co kilka sekund i sam wznowi auto-zakup - bez restartu programu.\n\n"
+                    + (self._session_note or ""))
+
+    def _username(self):
+        return getattr(self.account, "username", None) or "konto"
+
+    def _journal(self, method, *args):
+        """Wpis w dzienniku sesji konta (logs/session_events.csv). Zwraca opis do maila albo ""."""
+        journal = getattr(self.account, "journal", None)
+        if journal is None:
+            return ""
+        try:
+            return getattr(journal, method)(*args) or ""
+        except Exception:
+            log.exception("[AUTO-BUY] Błąd zapisu dziennika sesji")
+            return ""
 
     def _alert(self, subject, body):
         if self.notifier is not None and hasattr(self.notifier, "notify_text"):

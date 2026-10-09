@@ -482,3 +482,49 @@ def test_single_tab_before_refresh(tmp_path):
     account.context = C([other])
     asyncio.run(account._ensure_single_tab())
     assert account.page is other
+
+
+def test_session_journal_durations(tmp_path, monkeypatch):
+    """Dziennik: kiedy wylogowało, po ilu minutach sesji, kiedy wykryto ponowne zalogowanie, ile trwała przerwa."""
+    import csv
+    from datetime import datetime, timedelta
+    clock = [datetime(2026, 10, 9, 15, 0, 0)]
+    monkeypatch.setattr(acc.SessionJournal, "_now", staticmethod(lambda: clock[0]))
+    j = acc.SessionJournal(tmp_path)
+    j.up("szymooon_koala", "start programu")
+    clock[0] += timedelta(minutes=20)
+    j.checked_ok("szymooon_koala", 50 * 60)
+    clock[0] += timedelta(minutes=17)
+    j.check_failed(1, 3, "na stronie widać „Zaloguj się”", None)
+    note = j.down("na stronie widać „Zaloguj się”", None)
+    assert "Sesja trwała 37.0 min" in note and "zalogowany od 15:00:00" in note
+    assert "Ostatnie udane sprawdzenie 17.0 min wcześniej (token był wtedy ważny jeszcze 50 min)" in note
+    clock[0] += timedelta(minutes=4, seconds=30)
+    note = j.up("szymooon_koala", "wykryto ponowne zalogowanie")
+    assert "Przerwa (bez sesji) trwała 4.5 min" in note and "15:41:30" in note
+
+    with open(tmp_path / "session_events.csv", encoding="utf-8-sig") as f:
+        rows = list(csv.DictReader(f, delimiter=";"))
+    assert [r["zdarzenie"] for r in rows] == ["zalogowany", "sprawdzenie_ok", "sprawdzenie_nieudane",
+                                              "wylogowany", "zalogowany"]
+    assert rows[3]["sesja_trwala_min"] == "37.0" and rows[3]["ostatnie_ok_min_temu"] == "17.0"
+    assert rows[4]["przerwa_min"] == "4.5" and rows[1]["token_wazny_min"] == "50.0"
+
+
+def test_verify_session_writes_journal(tmp_path, monkeypatch):
+    import asyncio
+    import csv
+    from sniper.config import DelayConfig
+    account = acc.VintedAccount(_cfg(tmp_path, delays=DelayConfig(session_fail_checks=2,
+                                                                  session_retry_s=(0.0, 0.0))), tmp_path)
+    results = iter([False, True])
+
+    async def check(navigate=True):
+        account.last_reason = "banners: status 0"
+        return next(results)
+    monkeypatch.setattr(account, "refresh_and_check", check)
+    assert asyncio.run(account.verify_session()) is True
+    with open(tmp_path / "session_events.csv", encoding="utf-8-sig") as f:
+        rows = list(csv.DictReader(f, delimiter=";"))
+    assert [r["zdarzenie"] for r in rows] == ["sprawdzenie_nieudane", "sprawdzenie_ok"]
+    assert "próba 1/2: banners: status 0" in rows[0]["powod"]

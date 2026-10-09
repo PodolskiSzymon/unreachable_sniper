@@ -212,6 +212,12 @@ nigdy w repo ani w czacie. To tylko narzędzie diagnostyczne - przeglądarka kon
 
 ## Logi
 
+* `logs/session_events.csv` – dziennik sesji konta (Excel): kiedy wykryto brak zalogowania (z powodem, po ilu minutach
+  sesji, ile był ważny token), kiedy wykryto ponowne zalogowanie (po jakiej przerwie), każde udane / nieudane
+  podtrzymanie. Te same informacje są w mailach „sesja padła” / „wróciła” i w liniach `[SESJA]` w `sniper.log`.
+* `logs/mails.csv` – każdy wysłany mail: czas, rodzaj (oferta / zakup / systemowy), temat, wynik. Heartbeat pokazuje
+  „maile od startu: wysłane N (oferty …, zakupy …, systemowe …)” – licznik liczy od uruchomienia programu.
+
 * `sniper/logs/sniper.log` – wszystko, co widać w konsoli, plus szczegóły (pełny JSON złapanych ofert,
   tracebacki). Nowy plik co północ, poprzednie jako `sniper.log.RRRR-MM-DD`, trzymane 30 dni.
 * `sniper/logs/offers.jsonl` – każda złapana oferta jako jedna linia JSON (dane dla modułu AI).

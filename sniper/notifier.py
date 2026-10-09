@@ -4,7 +4,11 @@ Mail testowy (sprawdzenie konfiguracji z sniper/.env bez czekania na ogłoszenie
     python -m sniper.notifier
 """
 import asyncio
+import csv
 import logging
+from collections import Counter
+from datetime import datetime
+from pathlib import Path
 from email.message import EmailMessage
 from email.utils import formatdate, make_msgid
 from html import escape
@@ -236,11 +240,17 @@ def build_message(offer, sender, recipient, ai=None, purchase=None):
 class EmailNotifier:
     """Wysyła maile w tle - główna pętla tylko tworzy zadanie i leci dalej."""
 
-    def __init__(self, smtp_config):
+    # Rodzaje maili (licznik w heartbeacie i kolumna w logs/mails.csv).
+    KINDS = ("oferta", "zakup", "systemowy")
+
+    def __init__(self, smtp_config, log_dir=None):
         self.cfg = smtp_config
         self._tasks = set()
-        self.sent = 0
+        self.sent = 0                                   # wszystkie wysłane od startu programu
         self.failed = 0
+        self.sent_by_kind = Counter()
+        # Rejestr każdego maila: czas, rodzaj, temat, wynik -> logs/mails.csv (None = bez pliku, np. testy).
+        self.journal_path = Path(log_dir) / "mails.csv" if log_dir else None
         if not self.cfg.enabled:
             log.warning("[MAIL] Brak SNIPER_SMTP_USER/SNIPER_SMTP_PASSWORD - alerty e-mail wyłączone.")
         else:
@@ -255,8 +265,35 @@ class EmailNotifier:
         self._tasks.add(task)
         task.add_done_callback(self._tasks.discard)
 
+    def summary(self):
+        """„3 (oferty 1, zakupy 0, systemowe 2)” - do heartbeatu."""
+        k = self.sent_by_kind
+        return f"{self.sent} (oferty {k['oferta']}, zakupy {k['zakup']}, systemowe {k['systemowy']})"
+
+    def _journal(self, kind, subject, status, error=""):
+        if self.journal_path is None:
+            return
+        try:
+            new = not self.journal_path.exists()
+            self.journal_path.parent.mkdir(parents=True, exist_ok=True)
+            with open(self.journal_path, "a", newline="", encoding="utf-8-sig") as f:
+                w = csv.writer(f, delimiter=";")
+                if new:
+                    w.writerow(["czas", "rodzaj", "temat", "wynik", "blad"])
+                w.writerow([datetime.now().strftime("%Y-%m-%d %H:%M:%S"), kind, subject, status, error])
+        except OSError as exc:
+            log.warning("[MAIL] Nie zapisałem %s: %s", self.journal_path, exc)
+
+    def _count(self, kind, subject, ok, error=""):
+        if ok:
+            self.sent += 1
+            self.sent_by_kind[kind] += 1
+        else:
+            self.failed += 1
+        self._journal(kind, subject, "wysłany" if ok else "BŁĄD", error)
+
     async def send_now(self, offer, ai=None, purchase=None):
-        """Wysyła od razu i rzuca wyjątek przy błędzie (dla maila testowego)."""
+        """Wysyła od razu i rzuca wyjątek przy błędzie (dla maila testowego). Zwraca temat."""
         message = build_message(offer, self.cfg.sender, self.cfg.recipient, ai, purchase)
         await aiosmtplib.send(
             message,
@@ -267,14 +304,16 @@ class EmailNotifier:
             use_tls=True,          # SSL od początku połączenia (port 465)
             timeout=self.cfg.timeout,
         )
+        return message["Subject"]
 
     async def _send(self, offer, ai=None, purchase=None):
+        kind = "zakup" if purchase else "oferta"
         try:
-            await self.send_now(offer, ai, purchase)
-            self.sent += 1
-            log.info("[MAIL] Wysłano alert dla %s -> %s", offer.id, self.cfg.recipient)
+            subject = await self.send_now(offer, ai, purchase)
+            self._count(kind, subject or f"oferta {offer.id}", True)
+            log.info("[MAIL] Wysłano %s: %s -> %s", kind, subject or offer.id, self.cfg.recipient)
         except Exception as exc:
-            self.failed += 1
+            self._count(kind, f"oferta {offer.id}", False, repr(exc))
             log.error("[MAIL] Nie udało się wysłać alertu dla %s: %r", offer.id, exc)
 
     def notify_text(self, subject, body):
@@ -296,10 +335,10 @@ class EmailNotifier:
         try:
             await aiosmtplib.send(msg, hostname=self.cfg.host, port=self.cfg.port, username=self.cfg.username,
                                   password=self.cfg.password, use_tls=True, timeout=self.cfg.timeout)
-            self.sent += 1
+            self._count("systemowy", subject, True)
             log.info("[MAIL] Wysłano powiadomienie: %s", subject)
         except Exception as exc:
-            self.failed += 1
+            self._count("systemowy", subject, False, repr(exc))
             log.error("[MAIL] Nie udało się wysłać powiadomienia „%s”: %r", subject, exc)
 
     async def drain(self, timeout=15.0):

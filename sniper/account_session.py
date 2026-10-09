@@ -153,6 +153,95 @@ def jwt_expiry(token):
         return None
 
 
+class SessionJournal:
+    """Dziennik sesji konta -> logs/session_events.csv (otwórz w Excelu) + linie [SESJA] w logu.
+
+    Zdarzenia: zalogowany (start / ponowne zalogowanie - z długością przerwy), wylogowany (z powodem, długością
+    sesji, ważnością tokenu i czasem od ostatniego udanego sprawdzenia), sprawdzenie_ok / sprawdzenie_nieudane
+    (każde podtrzymanie, z ważnością tokenu). Cel: ustalić, PO JAKIM CZASIE i DLACZEGO sesja pada.
+    """
+    FILE = "session_events.csv"
+    FIELDS = ("czas", "zdarzenie", "konto", "powod", "sesja_trwala_min", "przerwa_min", "token_wazny_min",
+              "ostatnie_ok_min_temu")
+
+    def __init__(self, log_dir):
+        self.path = Path(log_dir) / self.FILE if log_dir else None
+        self.up_since = None            # od kiedy zalogowany
+        self.down_since = None          # od kiedy wylogowany
+        self.last_ok = None             # ostatnie udane sprawdzenie
+        self.last_ok_token_min = None   # ważność tokenu przy ostatnim udanym sprawdzeniu
+
+    @staticmethod
+    def _now():
+        from datetime import datetime
+        return datetime.now()
+
+    @staticmethod
+    def _minutes(value):
+        if value is None:
+            return ""
+        seconds = value.total_seconds() if hasattr(value, "total_seconds") else value
+        return f"{seconds / 60:.1f}"
+
+    def _write(self, event, **fields):
+        import csv
+        row = {"czas": self._now().strftime("%Y-%m-%d %H:%M:%S"), "zdarzenie": event}
+        row.update({k: ("" if v is None else v) for k, v in fields.items()})
+        log.info("[SESJA] %s | %s", event, ", ".join(f"{k}={v}" for k, v in row.items()
+                                                      if k not in ("czas", "zdarzenie") and v != ""))
+        if self.path is None:
+            return
+        try:
+            new = not self.path.exists()
+            self.path.parent.mkdir(parents=True, exist_ok=True)
+            with open(self.path, "a", newline="", encoding="utf-8-sig") as f:
+                w = csv.DictWriter(f, fieldnames=self.FIELDS, delimiter=";", extrasaction="ignore")
+                if new:
+                    w.writeheader()
+                w.writerow(row)
+        except OSError as exc:
+            log.warning("[SESJA] Nie zapisałem %s: %s", self.path, exc)
+
+    def checked_ok(self, konto, token_left=None):
+        self.last_ok = self._now()
+        self.last_ok_token_min = None if token_left is None else token_left / 60
+        self._write("sprawdzenie_ok", konto=konto, token_wazny_min=self._minutes(token_left))
+
+    def check_failed(self, attempt, total, reason, token_left=None):
+        self._write("sprawdzenie_nieudane", powod=f"próba {attempt}/{total}: {reason}",
+                    token_wazny_min=self._minutes(token_left))
+
+    def up(self, konto, how):
+        """Zalogowany (start albo wykryte ponowne zalogowanie). Zwraca opis do maila."""
+        now = self._now()
+        gap = now - self.down_since if self.down_since else None
+        self.up_since, self.down_since, self.last_ok = now, None, now
+        self._write("zalogowany", konto=konto, powod=how, przerwa_min=self._minutes(gap))
+        text = f"Zalogowanie wykryte: {now:%Y-%m-%d %H:%M:%S} ({how})."
+        if gap is not None:
+            text += f" Przerwa (bez sesji) trwała {gap.total_seconds() / 60:.1f} min."
+        return text
+
+    def down(self, reason, token_left=None):
+        """Wylogowany / brak sesji. Zwraca opis do maila."""
+        now = self._now()
+        lasted = now - self.up_since if self.up_since else None
+        since_ok = now - self.last_ok if self.last_ok else None
+        self.down_since, self.up_since = now, None
+        self._write("wylogowany", powod=reason, sesja_trwala_min=self._minutes(lasted),
+                    token_wazny_min=self._minutes(token_left), ostatnie_ok_min_temu=self._minutes(since_ok))
+        text = f"Brak zalogowania wykryty: {now:%Y-%m-%d %H:%M:%S}. Powód: {reason or '?'}."
+        if lasted is not None:
+            text += (f" Sesja trwała {lasted.total_seconds() / 60:.1f} min "
+                     f"(zalogowany od {now - lasted:%H:%M:%S}).")
+        if since_ok is not None:
+            text += f" Ostatnie udane sprawdzenie {since_ok.total_seconds() / 60:.1f} min wcześniej"
+            if self.last_ok_token_min is not None:
+                text += f" (token był wtedy ważny jeszcze {self.last_ok_token_min:.0f} min)"
+            text += "."
+        return text + f" Szczegóły: sniper/logs/{self.FILE}."
+
+
 LOGIN_HELP = (
     "1. W oknie Chrome bota kliknij „Zaloguj się” i wybierz logowanie E-MAILEM i HASŁEM Vinted.\n"
     "   NIE „Kontynuuj z Google/Facebook/Apple” - Google blokuje logowanie w przeglądarce sterowanej\n"
@@ -176,6 +265,7 @@ class VintedAccount:
         self.logged_in = False
         self._last_token = None                     # do wykrycia końca logowania (zmiana access_token_web)
         self.last_reason = ""                       # dlaczego ostatnie sprawdzenie sesji się nie udało
+        self.journal = SessionJournal(self.log_dir)  # logs/session_events.csv - kiedy i dlaczego sesja pada
         self._last_diag = float("-inf")             # ostatnia linia diagnostyczna przy czekaniu na logowanie
 
     async def start(self):
@@ -341,17 +431,25 @@ class VintedAccount:
                 reason = self.last_reason
             except Exception as exc:
                 ok, reason = False, f"błąd: {str(exc)[:200]}"
+            left = await self._safe_token_left()
             if ok:
                 if i > 1:
                     log.info("[KONTO] Sesja potwierdzona w próbie %d/%d - poprzednia porażka była chwilowa.", i, attempts)
-                left = await self.token_expires_in()
                 if left is not None:
                     log.info("[KONTO] Token konta ważny jeszcze ~%.0f min.", left / 60)
+                self.journal.checked_ok(self.username or "konto", left)
                 return True
             log.warning("[KONTO] Sprawdzenie sesji nieudane (%d/%d): %s", i, attempts, reason or "?")
+            self.journal.check_failed(i, attempts, reason or "?", left)
             if i < attempts:
                 await self._pause(self.delays.session_retry_s)
         return False
+
+    async def _safe_token_left(self):
+        try:
+            return await self.token_expires_in()
+        except Exception:
+            return None
 
     async def _ensure_single_tab(self):
         """Jedna karta w oknie bota. Każda karta Vinted odświeża token sama, a Vinted rotuje refresh token -
@@ -868,9 +966,11 @@ class VintedAccount:
             try:
                 self.logged_in = await self.verify_session()
                 if not self.logged_in:
+                    self.journal.down(self.last_reason, await self._safe_token_left())
                     await self.focus()
                     log.warning("[KONTO] Sesja padła - zaloguj się ponownie w oknie bota, czekam.")
-                    await self.wait_for_login()
+                    if await self.wait_for_login():
+                        self.journal.up(self.username or "konto", "wykryto ponowne zalogowanie")
             except Exception:
                 log.exception("[KONTO] Błąd podczas podtrzymania sesji - próbuję dalej.")
 
@@ -933,10 +1033,14 @@ async def _run(args):
         account.reset_profile()
     try:
         await account.start()
-        if not account.logged_in:
+        if account.logged_in:
+            account.journal.up(account.username or "konto", "start programu")
+        else:
+            account.journal.down("start programu: profil niezalogowany - " + (account.last_reason or "?"))
             print("\n=== ZALOGUJ SIĘ W OKNIE BOTA ===\n" + LOGIN_HELP +
                   "2. Nic tu nie naciskaj - bot sam wykryje logowanie i zacznie podtrzymywać sesję.")
-            await account.wait_for_login()
+            if await account.wait_for_login():
+                account.journal.up(account.username or "konto", "wykryto zalogowanie w oknie bota")
         await account.run_forever()
     except KeyboardInterrupt:
         log.info("[KONTO] Zatrzymano ręcznie.")

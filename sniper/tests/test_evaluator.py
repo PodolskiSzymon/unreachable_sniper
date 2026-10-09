@@ -655,3 +655,31 @@ def test_csv_with_old_header_is_rotated(tmp_path):
     assert len(archived) == 1 and "2026-10-03;oceniona;1" in archived[0].read_text(encoding="utf-8-sig")
     run(submit_and_wait(evaluator, laptop(id=2)))      # ten sam nagłówek - dopisuje, bez rotacji
     assert len(list(tmp_path.glob("evaluations.*.csv"))) == 1
+
+
+def test_notifier_counts_mails_by_kind_and_journals(tmp_path, monkeypatch):
+    """„maile od startu: wysłane 3 (oferty 1, zakupy 0, systemowe 2)” + logs/mails.csv."""
+    import asyncio
+    import csv
+    from types import SimpleNamespace
+    from sniper import notifier as nt
+    sent = []
+
+    async def fake_send(message, **kw):
+        sent.append(message["Subject"])
+    monkeypatch.setattr(nt.aiosmtplib, "send", fake_send)
+    cfg = SimpleNamespace(enabled=True, sender="a@onet.pl", recipient="a@onet.pl", host="h", port=465,
+                          username="u", password="p", timeout=5)
+    n = nt.EmailNotifier(cfg, log_dir=tmp_path)
+
+    async def scenario():
+        n.notify(nt.sample_offer())
+        n.notify_text("[Sniper] Sesja konta Vinted padła", "x")
+        n.notify_text("[Sniper] Sesja konta Vinted wróciła", "y")
+        await n.drain()
+    asyncio.run(scenario())
+    assert n.summary() == "3 (oferty 1, zakupy 0, systemowe 2)"
+    with open(tmp_path / "mails.csv", encoding="utf-8-sig") as f:
+        rows = list(csv.DictReader(f, delimiter=";"))
+    assert sorted(r["rodzaj"] for r in rows) == ["oferta", "systemowy", "systemowy"]
+    assert all(r["wynik"] == "wysłany" for r in rows)

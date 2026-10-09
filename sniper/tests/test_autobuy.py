@@ -277,3 +277,43 @@ def test_report_shows_ready_state(tmp_path):
     assert buyer.report().startswith("AUTO-BUY WSTRZYMANY")
     buyer.ready = True
     assert buyer.report().startswith("AUTO-BUY AKTYWNY")
+
+
+def test_session_loss_and_return_go_to_journal_and_mails(tmp_path):
+    """Utrata i powrót sesji: wpisy w logs/session_events.csv, a maile mówią kiedy i po jakim czasie."""
+    import csv
+    from sniper.account_session import SessionJournal
+    account = FakeAccount()
+    account.journal = SessionJournal(tmp_path)
+    account.last_reason = "na stronie widać „Zaloguj się”"
+    buyer, _ = make_buyer(tmp_path, account=account)
+    buyer.notifier = BodyNotifier()
+
+    async def scenario():
+        assert await buyer.start()
+        states = iter([False, True])
+
+        async def refresh(navigate=True):
+            return next(states)
+        account.refresh_and_check = refresh
+        await buyer.check_session()
+        await buyer.check_session()
+        await buyer.shutdown()
+    asyncio.run(scenario())
+    with open(tmp_path / "session_events.csv", encoding="utf-8-sig") as f:
+        rows = list(csv.DictReader(f, delimiter=";"))
+    assert [r["zdarzenie"] for r in rows] == ["zalogowany", "wylogowany", "zalogowany"]
+    assert rows[1]["powod"] == "na stronie widać „Zaloguj się”" and rows[1]["sesja_trwala_min"] != ""
+    assert rows[2]["powod"] == "wykryto ponowne zalogowanie" and rows[2]["przerwa_min"] != ""
+    (lost_subject, lost_body), (back_subject, back_body) = buyer.notifier.alerts
+    assert "padła" in lost_subject and "Sesja trwała" in lost_body and "Powód: na stronie" in lost_body
+    assert "wróciła" in back_subject and "Przerwa (bez sesji) trwała" in back_body
+
+
+class BodyNotifier(FakeNotifier):
+    def __init__(self):
+        super().__init__()
+        self.alerts = []
+
+    def notify_text(self, subject, body):
+        self.alerts.append((subject, body))

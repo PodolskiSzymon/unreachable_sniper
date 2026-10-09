@@ -113,7 +113,7 @@ async def main():
         browser_light=cfg.browser_light,
         state_file=Path(cfg.log_dir) / "session.json" if cfg.log_dir else None,
     )
-    notifier = EmailNotifier(cfg.smtp)
+    notifier = EmailNotifier(cfg.smtp, log_dir=cfg.log_dir)
     evaluator = build_evaluator(cfg, notifier)
     buyer = await build_buyer(cfg, notifier, evaluator)
     scout = Scout(cfg, session, notifier, evaluator, buyer)

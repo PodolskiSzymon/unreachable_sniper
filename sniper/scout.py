@@ -257,9 +257,10 @@ class Scout:
         s = self._stats
         skipped = ", ".join(f"{k}: {v}" for k, v in self._skipped.items()) or "0"
         log.info("[SCOUT] Żyję (%.0fs): %d skanów, %d błędów | nowych %d, złapanych %d, pominiętych: %s | "
-                 "maile: wysłane %d, błędy %d | katalog: %d ofert",
+                 "maile od startu: wysłane %s, błędy %d | katalog: %d ofert",
                  interval, s["polls"], s["errors"], s["new"], s["caught"], skipped,
-                 self.notifier.sent, self.notifier.failed, s["last_size"])
+                 self.notifier.summary() if hasattr(self.notifier, "summary") else self.notifier.sent,
+                 self.notifier.failed, s["last_size"])
         if self._top_items:
             log.info("[SCOUT] Pierwsze oferty w katalogu (kolejność Vinted):")
             for it in self._top_items:
