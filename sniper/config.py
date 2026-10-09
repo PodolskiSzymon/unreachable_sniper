@@ -349,6 +349,9 @@ class AccountConfig:
     login_url: str = _env("SCRAPER_LOGIN_URL", "https://www.vinted.pl/")
     # Limit czasu jednej nawigacji (s).
     nav_timeout: float = _env_float("SNIPER_ACCOUNT_NAV_TIMEOUT", 45.0)
+    # Sandbox Chrome (zabezpieczenie). Domyślnie WŁĄCZONY - Playwright sam z siebie dodaje --no-sandbox.
+    # false tylko gdy Chrome nie startuje (np. Linux jako root).
+    chrome_sandbox: bool = _env_bool("SCRAPER_CHROME_SANDBOX", True)
     delays: DelayConfig = field(default_factory=DelayConfig)
 
 

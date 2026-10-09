@@ -27,7 +27,7 @@ async def main(argv=None):
     logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(name)s: %(message)s")
     cfg = ScoutConfig().account
     try:
-        pw, ctx, page, lock = await launch_profile(cfg.profile_dir, cfg.nav_timeout)
+        pw, ctx, page, lock = await launch_profile(cfg.profile_dir, cfg.nav_timeout, cfg.chrome_sandbox)
     except ProfileInUseError as exc:
         print(f"\nBŁĄD: {exc}")
         return 2

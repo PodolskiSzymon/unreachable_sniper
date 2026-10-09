@@ -202,7 +202,7 @@ def test_launch_profile_uses_patchright_defaults(tmp_path, monkeypatch):
     pw, ctx, page, lock = asyncio.run(acc.launch_profile(profile, 45))
     try:
         assert calls["kw"] == {"user_data_dir": str(profile), "channel": "chrome", "headless": False,
-                               "no_viewport": True}
+                               "no_viewport": True, "chromium_sandbox": True}      # bez --no-sandbox
         assert page == "nowa-strona" and profile.is_dir() and calls["timeout"] == 45000
     finally:
         lock.release()

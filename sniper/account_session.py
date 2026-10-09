@@ -113,11 +113,13 @@ class ProfileLock:
         self._file = None
 
 
-async def launch_profile(profile_dir, nav_timeout=None):
+async def launch_profile(profile_dir, nav_timeout=None, sandbox=True):
     """Patchright + Chrome na stałym profilu bota. Zwraca (patchright, context, page, lock).
 
     Domyślna konfiguracja Patchrighta (działa najlepiej bez dodatków): channel="chrome", headless=False,
     no_viewport=True, bez proxy, bez user-agenta / nagłówków / skryptów / dodatkowych flag.
+    chromium_sandbox=True: Playwright/Patchright domyślnie dodaje --no-sandbox (pasek „nieobsługiwana flaga”
+    w oknie, test u użytkownika 2026-10-09) - to WYŁĄCZA zabezpieczenie Chrome, więc je przywracamy.
     Zajęty profil -> ProfileInUseError z czytelnym komunikatem.
     """
     from patchright.async_api import async_playwright
@@ -130,7 +132,8 @@ async def launch_profile(profile_dir, nav_timeout=None):
         pw = await async_playwright().start()
         try:
             ctx = await pw.chromium.launch_persistent_context(
-                user_data_dir=str(profile_dir), channel="chrome", headless=False, no_viewport=True)
+                user_data_dir=str(profile_dir), channel="chrome", headless=False, no_viewport=True,
+                chromium_sandbox=sandbox)
         except Exception as exc:
             text = str(exc)
             if "chrome" in text.lower() and ("not found" in text.lower() or "install" in text.lower()):
@@ -180,7 +183,8 @@ class VintedAccount:
 
     async def _launch(self):
         # Trwały profil => sesja przeżywa restart programu. BEZ proxy - domowe IP.
-        self._pw, self.context, self.page, self._lock = await launch_profile(self.profile_dir, self.cfg.nav_timeout)
+        self._pw, self.context, self.page, self._lock = await launch_profile(
+            self.profile_dir, self.cfg.nav_timeout, getattr(self.cfg, "chrome_sandbox", True))
         log.info("[KONTO] Chrome (Patchright) uruchomiony - profil: %s, bez proxy.", self.profile_dir.resolve())
 
     async def _pause(self, bounds):
