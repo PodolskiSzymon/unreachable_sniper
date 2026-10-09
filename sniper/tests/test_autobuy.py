@@ -270,3 +270,10 @@ def test_session_loss_pauses_buying_and_alerts_once_then_resumes(tmp_path):
     assert count == 1
     assert buyer.ready is True and "wróciła" in buyer.notifier.alerts[-1]
     assert buyer.wants(record_for(make_offer())) is True
+
+
+def test_report_shows_ready_state(tmp_path):
+    buyer, _ = make_buyer(tmp_path)
+    assert buyer.report().startswith("AUTO-BUY WSTRZYMANY")
+    buyer.ready = True
+    assert buyer.report().startswith("AUTO-BUY AKTYWNY")

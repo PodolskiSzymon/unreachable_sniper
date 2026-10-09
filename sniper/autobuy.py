@@ -111,7 +111,8 @@ class AutoBuyer:
 
     def report(self):
         s = self.stats
-        return (f"AUTO-BUY: okazje {s['submitted']}, kupione {s['bought']}, niepotwierdzone {s['unconfirmed']}, "
+        state = "AKTYWNY" if self.ready else "WSTRZYMANY (zaloguj się w oknie bota)"
+        return (f"AUTO-BUY {state}: okazje {s['submitted']}, kupione {s['bought']}, niepotwierdzone {s['unconfirmed']}, "
                 f"pominięte {s['skipped']}, błędy {s['error']} | dziś {self.ledger.count_today()}/{self.cfg.max_per_day}")
 
     # ------------------------------------------------------------------ praca w tle
