@@ -302,8 +302,8 @@ class DelayConfig:
     # Co ile wejść (losowo z zakresu) dłuższa pauza i ile MINUT trwa (zamiast zwykłej przerwy).
     long_pause_every: tuple = _env_range("SCRAPER_LONG_PAUSE_EVERY", (12.0, 18.0))
     long_pause_min: tuple = _env_range("SCRAPER_LONG_PAUSE_MIN", (40.0, 60.0))
-    # Sesja padła (auto-zakup wstrzymany): sprawdzanie częściej, co tyle SEKUND.
-    session_lost_check_s: tuple = _env_range("SCRAPER_SESSION_LOST_CHECK_S", (90.0, 150.0))
+    # Czekanie na Twoje ręczne logowanie w oknie bota: sprawdzanie co tyle SEKUND (bez przeładowania strony).
+    login_check_s: tuple = _env_range("SCRAPER_LOGIN_CHECK_S", (5.0, 10.0))
     # Krótka pauza przed kliknięciem / po hydracji strony (s) i przed ponowieniem kliku (s).
     click_s: tuple = _env_range("SCRAPER_CLICK_DELAY_S", (0.8, 2.0))
     retry_s: tuple = _env_range("SCRAPER_RETRY_DELAY_S", (1.5, 3.0))
@@ -338,11 +338,10 @@ class AccountConfig:
     """Sesja TWOJEGO konta Vinted (auto-zakup) - sniper.account_session, przeglądarka Patchright.
 
     Idzie z domowego IP, NIGDY przez proxy IPRoyal (sesja konta i ciastka anty-botowe są związane z Twoim IP).
-    Osobny, stały profil bota (SCRAPER_PROFILE_DIR) - NIE Twój główny profil Chrome/Edge. Logowanie raz ręcznie:
-    python -m sniper.account_session --login. Stronę odświeża jej własny JS, więc token podtrzymuje się sam.
+    Osobny, stały profil bota (SCRAPER_PROFILE_DIR) - NIE Twój główny profil Chrome/Edge. Logowanie WYŁĄCZNIE ręczne
+    w oknie bota (bez my_headers.txt); stronę odświeża jej własny JS, więc token podtrzymuje się sam.
     """
     enabled: bool = _env_bool("SNIPER_ACCOUNT_ENABLED", False)
-    headers_file: str = _env("SNIPER_ACCOUNT_HEADERS_FILE")   # domyślnie <log_dir>/my_headers.txt (ustalane niżej)
     # Folder profilu bota (ciastka sesji konta!). Względny = od folderu, z którego uruchamiasz program.
     profile_dir: str = _env("SCRAPER_PROFILE_DIR", "./profiles/scraper")
     # Strona otwierana przy --login (logujesz się na niej ręcznie).

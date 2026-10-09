@@ -245,10 +245,14 @@ async def _cli(argv=None):
         except ProfileInUseError as exc:
             print(f"\nBŁĄD: {exc}")
             return 2
-        if not account.username:
-            print("Nie potwierdziłem zalogowania - sprawdź my_headers.txt (świeży cURL) i spróbuj --reset.")
-            return 1
-        print(f"Zalogowany jako {account.username}. Przygotowuję auto-zakup: {args.url}")
+        if not account.logged_in:
+            from .account_session import LOGIN_HELP
+            print("\n=== ZALOGUJ SIĘ W OKNIE BOTA (masz 10 min) ===\n" + LOGIN_HELP +
+                  "2. Nic tu nie naciskaj - bot sam wykryje logowanie i przejdzie do zakupu.")
+            if not await account.wait_for_login(timeout=600):
+                print("Nie wykryłem logowania w ciągu 10 min - przerywam.")
+                return 1
+        print(f"Zalogowany jako {account.username or 'konto'}. Przygotowuję auto-zakup: {args.url}")
         try:
             result = await attempt_purchase(account, args.url, None, buy_cfg, ledger)
         except Exception as exc:

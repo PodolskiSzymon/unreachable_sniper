@@ -51,7 +51,8 @@ class FakeAccount:
         await asyncio.sleep(self.pay_delay)
         return "zapytanie POST .../checkout/payment"
 
-    async def refresh_and_check(self):
+    async def refresh_and_check(self, navigate=True):
+        self.calls.append("check" if navigate else "check-passive")
         return True
 
     async def close(self):
@@ -249,7 +250,10 @@ def test_session_loss_pauses_buying_and_alerts_once_then_resumes(tmp_path):
         assert await buyer.start()
         states = iter([False, False, True])
 
-        async def refresh():
+        modes = []
+
+        async def refresh(navigate=True):
+            modes.append(navigate)
             return next(states)
         account.refresh_and_check = refresh
         await buyer.check_session()
@@ -258,6 +262,7 @@ def test_session_loss_pauses_buying_and_alerts_once_then_resumes(tmp_path):
         dead_after_second = len(buyer.notifier.alerts)
         await buyer.check_session()                                     # wróciła
         await buyer.shutdown()
+        assert modes == [True, False, False]       # po utracie: czekanie na logowanie BEZ przeładowania strony
         return dead_after_first, dead_after_second
 
     (ready, alerts), count = asyncio.run(scenario())

@@ -8,8 +8,10 @@ konfiguracja - bez własnego user-agenta, nagłówków, skryptów i flag. Stały
 domyślnie ./profiles/scraper) - nie Twój główny profil Chrome/Edge. Jeden proces na profil (blokada sniper.lock).
 
 Jak to działa:
-  1. Pierwsze logowanie: `python -m sniper.account_session --login` - logujesz się RĘCZNIE w oknie bota, Enter
-     w konsoli; profil pamięta sesję. (Awaryjnie: ciastka z sniper/logs/my_headers.txt - cURL z DevTools.)
+  1. Logowanie TYLKO ręczne w oknie bota - bot NIE wczytuje ciastek z my_headers.txt. Gdy profil nie jest
+     zalogowany, okno zostaje otwarte na stronie głównej Vinted: logujesz się w nim, a bot sam to wykrywa
+     (sprawdza co kilka sekund BEZ przeładowania strony) i od razu korzysta z tej sesji. Profil ją pamięta.
+     Alternatywa od zera: `python -m sniper.account_session --login` (czysty profil, Enter w konsoli).
   2. Trzyma otwartą przeglądarkę i co kilkanaście minut wchodzi na stronę. Własny JavaScript Vinted odświeża
      wtedy access_token (żyje ~1 h) refresh-tokenem (żyje ~7 dni) - dzięki temu sesja nie wygasa.
   3. Co pętlę sprawdza przez /api/v2/banners, czy wciąż jesteś zalogowany (czyta nazwę konta).
@@ -20,7 +22,7 @@ import logging
 import os
 from pathlib import Path
 
-from .account import DEFAULT_HEADERS_FILE, detect_banners, read_headers
+from .account import detect_banners
 from .config import AccountConfig, DelayConfig, KeepalivePacer, ScoutConfig
 
 log = logging.getLogger("sniper.account")
@@ -28,26 +30,6 @@ log = logging.getLogger("sniper.account")
 HOME_URL = "https://www.vinted.pl/"
 # W przeglądarce robimy fetch względny - leci jako same-origin z ciastkami konta (tak jak robi to strona).
 BANNERS_PATH = "/api/v2/banners"
-COOKIE_DOMAIN = ".vinted.pl"
-
-
-def cookie_header_to_playwright(cookie_header, domain=COOKIE_DOMAIN):
-    """'a=1; b=2' -> [{'name','value','domain','path'}] dla context.add_cookies()."""
-    cookies = []
-    for part in (cookie_header or "").split(";"):
-        name, sep, value = part.strip().partition("=")
-        if sep and name:
-            cookies.append({"name": name, "value": value, "domain": domain, "path": "/"})
-    return cookies
-
-
-def load_account_cookies(headers_file):
-    """Ciastka konta z pliku my_headers.txt w formacie Playwrighta. Rzuca, gdy brak pliku / ciastek."""
-    pasted = read_headers(headers_file)                 # {'cookie': ..., 'user-agent': ..., ...}
-    cookies = cookie_header_to_playwright(pasted.get("cookie", ""))
-    if not cookies:
-        raise ValueError(f"Brak ciastek w {headers_file} - skopiuj zapytanie jako cURL (bash) z F12.")
-    return cookies, pasted.get("user-agent")
 
 
 # JS wykonywany w kontekście strony: pobiera /api/v2/banners i zwraca {status, body}.
@@ -159,15 +141,20 @@ async def launch_profile(profile_dir, nav_timeout=None, sandbox=True):
         raise
 
 
+LOGIN_HELP = (
+    "1. W oknie Chrome bota kliknij „Zaloguj się” i wybierz logowanie E-MAILEM i HASŁEM Vinted.\n"
+    "   NIE „Kontynuuj z Google/Facebook/Apple” - Google blokuje logowanie w przeglądarce sterowanej\n"
+    "   przez program. Nie masz hasła do Vinted? „Nie pamiętasz hasła?” -> ustaw je linkiem z maila.\n"
+    "   Login i hasło wpisujesz SAM - program niczego nie wpisuje.\n")
+
+
 class VintedAccount:
     """Trwała sesja przeglądarki zalogowanej na Twoje konto (bez proxy)."""
 
     def __init__(self, cfg: AccountConfig, log_dir):
         self.cfg = cfg
-        log_dir = Path(log_dir)
-        self.headers_file = Path(cfg.headers_file) if cfg.headers_file else log_dir / DEFAULT_HEADERS_FILE
         self.profile_dir = Path(cfg.profile_dir or "./profiles/scraper")
-        self.log_dir = log_dir                      # zrzuty ekranu przy błędach (nie do profilu z ciastkami)
+        self.log_dir = Path(log_dir)                # zrzuty ekranu przy błędach (nie do profilu z ciastkami)
         self.delays = getattr(cfg, "delays", None) or DelayConfig()
         self._pw = None
         self._lock = None
@@ -175,11 +162,16 @@ class VintedAccount:
         self.page = None
         self.username = None
         self.logged_in = False
-        self._logging_in = False
 
     async def start(self):
+        """Uruchamia przeglądarkę i sprawdza sesję. Niezalogowany -> okno ZOSTAJE na stronie głównej do logowania."""
         await self._launch()
-        return await self._after_launch()
+        self.logged_in = await self.refresh_and_check()
+        if not self.logged_in:
+            await self.focus()
+            log.warning("[KONTO] NIE jesteś zalogowany. ZALOGUJ SIĘ w otwartym oknie Chrome bota (strona główna "
+                        "Vinted, e-mail + hasło) - bot sam wykryje logowanie i z niego skorzysta.")
+        return self
 
     async def _launch(self):
         # Trwały profil => sesja przeżywa restart programu. BEZ proxy - domowe IP.
@@ -190,46 +182,37 @@ class VintedAccount:
     async def _pause(self, bounds):
         await asyncio.sleep(DelayConfig.pick(bounds))
 
-    async def _after_launch(self):
-        seeded, _ = await self._seed_cookies()
-        self.logged_in = await self.refresh_and_check()
-        if not self.logged_in and not seeded and not self.has_own_login() and self.headers_file.exists():
-            # Profil bez ważnej sesji - spróbuj jeszcze ciastek z pliku (tak jak przed ograniczeniem wgrywania).
-            log.warning("[KONTO] Profil niezalogowany - wgrywam ponownie ciastka z %s i sprawdzam jeszcze raz.",
-                        self.headers_file.name)
-            await self._seed_cookies(force=True)
-            self.logged_in = await self.refresh_and_check()
-        return self
+    async def wait_for_login(self, timeout=None):
+        """Czeka, aż zalogujesz się RĘCZNIE w otwartym oknie. Sprawdza co kilka s BEZ przeładowania strony.
 
-    # Znacznik w profilu: który my_headers.txt (czas modyfikacji) już wgraliśmy.
-    SEED_MARKER = "sniper_seeded_headers.txt"
-    # Znacznik w profilu: bot ma WŁASNE logowanie (python -m sniper.account_session --login) -> my_headers.txt
-    # nie jest używany. Kopia sesji z Twojej przeglądarki (ten sam sid, cudze cf_clearance/datadome) nie umiała się
-    # odświeżyć - bot żył tylko do wygaśnięcia skopiowanego tokenu (test 2026-10-08/09).
-    OWN_LOGIN_MARKER = "sniper_own_login.txt"
-
-    def has_own_login(self):
-        return (self.profile_dir / self.OWN_LOGIN_MARKER).exists()
+        Zwraca True po wykryciu logowania, False po upływie timeout (s; None = bez limitu).
+        """
+        import time as _t
+        deadline = None if timeout is None else _t.monotonic() + timeout
+        while deadline is None or _t.monotonic() < deadline:
+            await self._pause(self.delays.login_check_s)
+            try:
+                if await self.refresh_and_check(navigate=False):
+                    self.logged_in = True
+                    log.warning("[KONTO] Wykryłem logowanie w oknie bota (%s) - korzystam z tej sesji.",
+                                self.username or "konto")
+                    return True
+            except Exception as exc:                    # np. strona w trakcie przeładowania po zalogowaniu
+                log.debug("[KONTO] Sprawdzenie logowania nieudane (%s) - ponowię.", exc)
+        return False
 
     async def interactive_login(self, wait_for_user=None, attempts=5):
-        """Ręczne logowanie w oknie bota (czysty profil): Ty logujesz się w spokoju, potem Enter w konsoli.
+        """--login: czysty profil, Ty logujesz się w spokoju, potem Enter w konsoli.
 
-        Program NIC nie robi w oknie, dopóki nie naciśniesz Enter (wcześniej sprawdzał co kilka sekund
-        i przeładowywał stronę w trakcie logowania). Zwraca True, gdy logowanie potwierdzone - wtedy zapisuje
-        znacznik własnego logowania w profilu. cURL nie jest potrzebny: logowanie zostaje w profilu bota.
+        Program NIC nie robi w oknie, dopóki nie naciśniesz Enter. Zwraca True, gdy logowanie potwierdzone.
         """
         if wait_for_user is None:
             async def wait_for_user():
                 return await asyncio.get_running_loop().run_in_executor(None, input)
-        self._logging_in = True                     # w trakcie logowania NIE wgrywaj my_headers.txt
         await self._launch()
         await self.page.goto(self.cfg.login_url or HOME_URL, wait_until="domcontentloaded")
         await self._dismiss_consent()
-        print("\n=== LOGOWANIE BOTA ===\n"
-              "1. W otwartym oknie kliknij „Zaloguj się” i wybierz logowanie E-MAILEM i HASŁEM Vinted.\n"
-              "   NIE „Kontynuuj z Google/Facebook/Apple” - Google blokuje logowanie w przeglądarce sterowanej\n"
-              "   przez program. Nie masz hasła do Vinted? „Nie pamiętasz hasła?” -> ustaw je linkiem z maila.\n"
-              "   Login i hasło wpisujesz SAM - program niczego nie wpisuje.\n"
+        print("\n=== LOGOWANIE BOTA ===\n" + LOGIN_HELP +
               "2. Gdy zobaczysz swoje konto (awatar w prawym górnym rogu), wróć tutaj i naciśnij ENTER.\n"
               "   (q + Enter = przerwij)")
         for attempt in range(1, attempts + 1):
@@ -239,8 +222,6 @@ class VintedAccount:
                 return False
             print("Sprawdzam logowanie...")
             if await self.refresh_and_check():
-                (self.profile_dir / self.OWN_LOGIN_MARKER).write_text(
-                    self.username or "zalogowany", encoding="utf-8")
                 self.logged_in = True
                 log.warning("[KONTO] Zalogowano w oknie bota jako %s - profil ma teraz WŁASNĄ sesję.",
                             self.username or "?")
@@ -250,61 +231,31 @@ class VintedAccount:
         log.error("[KONTO] Nie potwierdziłem zalogowania po %d próbach.", attempts)
         return False
 
-    def _headers_stamp(self):
-        return str(self.headers_file.stat().st_mtime_ns)
+    async def refresh_and_check(self, navigate=True):
+        """Czy jesteś zalogowany? Zwraca bool.
 
-    def needs_seed(self):
-        """Czy wgrać ciastka z my_headers.txt? Tylko nowy/wyczyszczony profil albo ŚWIEŻO wklejony cURL.
-
-        Profil sam trzyma aktualne tokeny (Vinted je odświeża). Ponowne wgranie STAREGO access/refresh tokena
-        z my_headers.txt przy każdym starcie nadpisywało te nowsze i kończyło się pętlą 'session-refresh'.
+        navigate=True: wchodzi na stronę główną (JS Vinted odświeża wtedy token) - podtrzymanie sesji.
+        navigate=False: tylko patrzy na obecną stronę, bez przeładowania - gdy czekamy, aż zalogujesz się ręcznie
+        (przeładowanie w trakcie wpisywania hasła przerwałoby logowanie).
         """
-        if not self.headers_file.exists() or self.has_own_login() or self._logging_in:
-            return False
-        marker = self.profile_dir / self.SEED_MARKER
-        try:
-            return marker.read_text(encoding="utf-8").strip() != self._headers_stamp()
-        except OSError:
-            return True
-
-    async def _seed_cookies(self, force=False):
-        """Wstrzykuje ciastka z my_headers.txt - tylko gdy needs_seed() (albo force)."""
-        if not self.headers_file.exists():
-            log.info("[KONTO] Brak %s - polegam na zapisanym profilu przeglądarki.", self.headers_file)
-            return [], None
-        if self.has_own_login():
-            log.info("[KONTO] Profil ma własne logowanie (--login) - nie używam %s.", self.headers_file.name)
-            return [], None
-        if not force and not self.needs_seed():
-            log.info("[KONTO] Pomijam %s (już wgrany) - profil ma własne, odświeżane tokeny. "
-                     "Nowy cURL zostanie wgrany automatycznie po zapisaniu pliku.", self.headers_file.name)
-            return [], None
-        cookies, user_agent = load_account_cookies(self.headers_file)
-        await self.context.add_cookies(cookies)
-        try:
-            (self.profile_dir / self.SEED_MARKER).write_text(self._headers_stamp(), encoding="utf-8")
-        except OSError as exc:
-            log.warning("[KONTO] Nie zapisałem znacznika wgrania ciastek: %s", exc)
-        log.info("[KONTO] Wczytałem %d ciastek z %s (nowy plik albo nowy profil).", len(cookies), self.headers_file.name)
-        return cookies, user_agent
-
-    async def refresh_and_check(self):
-        """Wchodzi na stronę (JS Vinted odświeża token) i sprawdza, czy jesteś zalogowany. Zwraca bool."""
-        if self.context is not None and self.needs_seed():
-            log.info("[KONTO] %s zmieniony - wgrywam nowe ciastka bez restartu.", self.headers_file.name)
-            await self._seed_cookies()
-        await self.page.goto(HOME_URL, wait_until="domcontentloaded")
-        if await self._stuck_on_session_refresh():
-            log.warning("[KONTO] Pętla 'session-refresh' - sesja w profilu jest nieważna. "
-                        "Napraw: zatrzymaj program, wklej ŚWIEŻY cURL do %s i uruchom z --reset "
-                        "(czyści stary profil). Patrz README.", self.headers_file.name)
-            self.username = None
-            return False
+        quiet = not navigate
+        if navigate:
+            await self.page.goto(HOME_URL, wait_until="domcontentloaded")
+            if await self._stuck_on_session_refresh():
+                log.warning("[KONTO] Pętla 'session-refresh' - sesja w profilu jest nieważna. Zaloguj się "
+                            "ponownie w oknie bota (albo: zatrzymaj program i python -m sniper.account_session "
+                            "--login, czyści profil).")
+                self.username = None
+                return False
+        else:
+            if self.is_session_refresh(self.page.url) or await self._login_button_visible():
+                self.username = None                    # gość / formularz logowania - bez zapytań do Vinted
+                return False
         result = await self.page.evaluate(_BANNERS_FETCH, BANNERS_PATH)
         status, body = result.get("status"), result.get("body") or ""
         if status == 401:
-            log.warning("[KONTO] 401 - sesja wygasła. Zaloguj się w przeglądarce i wklej świeży cURL do %s.",
-                        self.headers_file.name)
+            if not quiet:
+                log.warning("[KONTO] 401 - sesja wygasła. Zaloguj się ponownie w oknie bota.")
             self.username = None
             return False
         _, name = detect_banners(body)
@@ -315,16 +266,17 @@ class VintedAccount:
         # /api/v2/banners odpowiada 200/code:0 także NIEZALOGOWANEMU gościowi - samo to nie dowodzi sesji.
         # Dodatkowo: brak widocznego „Zaloguj się” na stronie i ciastko konta access_token_web.
         if status != 200 or '"code":0' not in body:
-            log.info("[KONTO] Sesja niepewna (banner bez nazwy, status %s) - traktuję jako niezalogowany.", status)
+            if not quiet:
+                log.info("[KONTO] Sesja niepewna (banner bez nazwy, status %s) - traktuję jako niezalogowany.",
+                         status)
             self.username = None
             return False
         login_button = await self._login_button_visible()
         has_token = await self._has_account_token()
         if login_button or has_token is False:
-            if not self._logging_in:
-                log.warning("[KONTO] NIE jesteś zalogowany (%s). Zaloguj bota: python -m sniper.account_session "
-                            "--login", "na stronie jest „Zaloguj się”" if login_button
-                            else "brak ciastka access_token_web")
+            if not quiet:
+                log.warning("[KONTO] NIE jesteś zalogowany (%s). Zaloguj się w oknie bota (strona główna Vinted).",
+                            "na stronie jest „Zaloguj się”" if login_button else "brak ciastka access_token_web")
             self.username = None
             return False
         log.info("[KONTO] Sesja aktywna (banner bez nazwy, ale bez „Zaloguj się” i z tokenem konta).")
@@ -777,7 +729,11 @@ class VintedAccount:
         while True:
             await asyncio.sleep(pacer.next_seconds())
             try:
-                await self.refresh_and_check()
+                self.logged_in = await self.refresh_and_check()
+                if not self.logged_in:
+                    await self.focus()
+                    log.warning("[KONTO] Sesja padła - zaloguj się ponownie w oknie bota, czekam.")
+                    await self.wait_for_login()
             except Exception:
                 log.exception("[KONTO] Błąd podczas podtrzymania sesji - próbuję dalej.")
 
@@ -787,8 +743,7 @@ class VintedAccount:
         if self.profile_dir.exists():
             ProfileLock(self.profile_dir).acquire().release()
             shutil.rmtree(self.profile_dir, ignore_errors=True)
-            log.info("[KONTO] Wyczyściłem profil %s - startuję od zera z ciastek z %s.",
-                     self.profile_dir, self.headers_file.name)
+            log.info("[KONTO] Wyczyściłem profil %s - trzeba się zalogować od nowa.", self.profile_dir)
 
     async def close(self):
         try:
@@ -841,8 +796,10 @@ async def _run(args):
         account.reset_profile()
     try:
         await account.start()
-        if not account.username:
-            log.warning("[KONTO] Nie potwierdziłem nazwy konta - sprawdź my_headers.txt (świeży cURL).")
+        if not account.logged_in:
+            print("\n=== ZALOGUJ SIĘ W OKNIE BOTA ===\n" + LOGIN_HELP +
+                  "2. Nic tu nie naciskaj - bot sam wykryje logowanie i zacznie podtrzymywać sesję.")
+            await account.wait_for_login()
         await account.run_forever()
     except KeyboardInterrupt:
         log.info("[KONTO] Zatrzymano ręcznie.")

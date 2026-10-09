@@ -44,8 +44,9 @@ class AutoBuyer:
     async def start(self):
         """Uruchamia przeglądarkę konta. False = przeglądarka w ogóle nie wstała (auto-zakup wyłączony).
 
-        Brak zalogowania NIE zamyka okna: auto-zakup jest wstrzymany (okazje idą zwykłym mailem), a podtrzymanie
-        sesji sprawdza dalej (co ~2 min) - po wklejeniu świeżego cURL do my_headers.txt wznawia się samo.
+        Brak zalogowania NIE zamyka okna: zostaje na stronie głównej Vinted, auto-zakup jest wstrzymany (okazje idą
+        zwykłym mailem), a bot co kilka sekund (bez przeładowania strony) sprawdza, czy już się zalogowałeś - wtedy
+        wznawia się sam.
         """
         try:
             await self.account.start()
@@ -60,9 +61,9 @@ class AutoBuyer:
                        asyncio.create_task(self._keepalive(), name="autobuy-keepalive")]
         if not logged:
             self.ready = False
-            log.error("[AUTO-BUY] Nie jesteś zalogowany na konto - auto-zakup WSTRZYMANY, okno zostaje otwarte "
-                      "(okazje idą zwykłym mailem). Napraw: python -m sniper.account_session --login (ręczne "
-                      "logowanie w oknie bota), potem ponownie python -m sniper.")
+            log.error("[AUTO-BUY] Nie jesteś zalogowany na konto - auto-zakup WSTRZYMANY (okazje idą zwykłym mailem). "
+                      "ZALOGUJ SIĘ w otwartym oknie Chrome bota (strona główna Vinted, e-mail + hasło) - bot wykryje "
+                      "to sam i wznowi auto-zakup, bez restartu.")
             self._alert_session_lost()
             return True
         self.ready = True
@@ -171,10 +172,16 @@ class AutoBuyer:
         self.notifier.notify(offer, ai=record, purchase=purchase)
 
     async def check_session(self):
-        """Jedno podtrzymanie sesji. Przy utracie: auto-zakup wstrzymany + jeden mail; po powrocie - wznowiony."""
+        """Jedno podtrzymanie sesji. Przy utracie: auto-zakup wstrzymany + jeden mail; po powrocie - wznowiony.
+
+        Gdy auto-zakup wstrzymany (czekamy na Twoje logowanie w oknie) - sprawdzenie BEZ przeładowania strony.
+        """
         async with self._lock:
             try:
-                alive = await self.account.refresh_and_check()
+                if self.ready:
+                    alive = await self.account.refresh_and_check()
+                else:
+                    alive = await self.account.refresh_and_check(navigate=False)
             except Exception:
                 log.exception("[AUTO-BUY] Błąd podtrzymania sesji konta - spróbuję przy następnym podejściu.")
                 return
@@ -186,19 +193,19 @@ class AutoBuyer:
         elif not alive and self.ready:
             self.ready = False
             log.error("[AUTO-BUY] Sesja konta padła - auto-zakup WSTRZYMANY (okazje idą zwykłym mailem). "
-                      "Napraw: python -m sniper.account_session --login (ręczne logowanie w oknie bota).")
+                      "Zaloguj się ponownie w otwartym oknie Chrome bota - bot wykryje to sam.")
+            try:
+                await self.account.focus()
+            except Exception:
+                pass
             self._alert_session_lost()
 
     def _alert_session_lost(self):
         self._alert("[Sniper] Sesja konta Vinted padła - auto-zakup WSTRZYMANY",
                     "Zwiadowca nie jest zalogowany na Twoje konto Vinted, więc NIE kupuje okazji "
-                    "(przychodzą zwykłym mailem). Okno przeglądarki konta zostaje otwarte.\n\n"
-                    "Naprawa (zalecana - własne logowanie bota):\n"
-                    "1. Zatrzymaj Zwiadowcę (Ctrl+C).\n"
-                    "2. python -m sniper.account_session --login  -> zaloguj się RĘCZNIE w oknie, które się otworzy.\n"
-                    "3. python -m sniper\n\n"
-                    "Szybka alternatywa bez restartu: świeży cURL z F12 do sniper/logs/my_headers.txt (wgra się sam "
-                    "w ciągu 2 min) - ale taka kopia sesji z Twojej przeglądarki zwykle wygasa po 1-2 h.")
+                    "(przychodzą zwykłym mailem). Okno Chrome bota zostaje otwarte na stronie Vinted.\n\n"
+                    "Naprawa: zaloguj się RĘCZNIE w tym oknie (e-mail + hasło Vinted, nie przez Google). "
+                    "Bot sprawdza co kilka sekund i sam wznowi auto-zakup - bez restartu programu.")
 
     def _alert(self, subject, body):
         if self.notifier is not None and hasattr(self.notifier, "notify_text"):
@@ -207,7 +214,7 @@ class AutoBuyer:
     async def _keepalive(self):
         pacer = KeepalivePacer(self.delays)
         while True:
-            # Przy wstrzymanym auto-zakupie sprawdzaj częściej (co ~2 min), żeby świeży cURL szybko go wznowił.
-            delay = pacer.next_seconds() if self.ready else DelayConfig.pick(self.delays.session_lost_check_s)
+            # Wstrzymany auto-zakup = czekamy na Twoje logowanie w oknie: sprawdzanie co kilka s, bez przeładowania.
+            delay = pacer.next_seconds() if self.ready else DelayConfig.pick(self.delays.login_check_s)
             await asyncio.sleep(delay)
             await self.check_session()

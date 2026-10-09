@@ -122,16 +122,18 @@ dłuższa pauza) wchodzi na stronę - JS Vinted odświeża wtedy token dostępu 
 wygasa. Sprawdza przez `api/v2/banners`, czy wciąż jesteś zalogowany. `open_item(url)` otwiera ofertę na koncie -
 fundament pod auto-zakup, ale NA RAZIE NIC NIE KUPUJE.
 
-Włącz `SNIPER_ACCOUNT_ENABLED=true`, miej `sniper/logs/my_headers.txt` (świeży cURL z F12). Po ~7 dniach,
-gdy refresh-token wygaśnie, wklej nowy cURL i uruchom ponownie. Pliki `my_headers.txt` i `profiles/`
-są w `.gitignore`. Jeden proces na profil (blokada `sniper.lock` w profilu): drugi start - np. `account_session`
+Włącz `SNIPER_ACCOUNT_ENABLED=true`. **Logowanie wyłącznie ręczne w oknie bota** - bot nie czyta
+`my_headers.txt`. Gdy profil nie jest zalogowany (pierwszy start, wygaśnięcie sesji po ~7 dniach), okno Chrome bota
+wyskakuje na stronie głównej Vinted: zaloguj się w nim (e-mail + hasło), a bot w ciągu kilku sekund sam to wykryje
+(sprawdza `SCRAPER_LOGIN_CHECK_S`, bez przeładowania strony) i od razu korzysta z tej sesji - bez restartu i bez
+Entera. W Zwiadowcy auto-zakup jest w tym czasie wstrzymany, dostajesz jeden mail. Folder `profiles/` jest w
+`.gitignore`. Jeden proces na profil (blokada `sniper.lock` w profilu): drugi start - np. `account_session`
 obok Zwiadowcy z auto-zakupem - kończy się komunikatem „profil jest JUŻ UŻYWANY”, a `--reset`/`--login` nie
 skasuje profilu, na którym działa inny proces.
 
 **Pętla `session-refresh` / „ciągle się odświeża”** = sesja w profilu jest nieważna (np. po ponownym
-zalogowaniu w innej przeglądarce stare tokeny przestały działać). Napraw: zatrzymaj program, wklej ŚWIEŻY
-cURL do `my_headers.txt` i uruchom z czyszczeniem profilu:
-`python -m sniper.account_session --reset`. Program sam wykrywa tę pętlę i o niej informuje zamiast kręcić się
+zalogowaniu w innej przeglądarce stare tokeny przestały działać). Napraw: zaloguj się ponownie w oknie bota, a jeśli
+to nie pomaga - zatrzymaj program i wyczyść profil: `python -m sniper.account_session --login`. Program sam wykrywa tę pętlę i o niej informuje zamiast kręcić się
 w kółko.
 
 Uwaga: Vinted ma ochronę anty-bot (datadome). Zbyt częste automatyczne wejścia mogą ją wywołać - dlatego
@@ -154,10 +156,10 @@ python -m sniper.buyer "https://www.vinted.pl/items/XXXX-..." --max 30   # test 
 python -m sniper.buyer "https://www.vinted.pl/items/XXXX-..." --forget   # usuń fałszywy wpis z bought.jsonl i spróbuj
 ```
 
-**Logowanie bota (zalecane)**: `python -m sniper.account_session --login` czyści profil bota i otwiera jego okno na
-stronie `SCRAPER_LOGIN_URL` - zaloguj się w nim RĘCZNIE (program niczego nie wpisuje) (login, hasło, ewentualny kod), potem naciśnij ENTER w konsoli. Bot dostaje własną sesję, którą sam odświeża; `my_headers.txt`
-(kopia sesji z Twojej przeglądarki) przestaje być używany - taka kopia wygasała po 1-2 h. Nie używaj potem w Vinted
-„wyloguj ze wszystkich urządzeń”, bo zakończy to też sesję bota.
+**Logowanie bota od zera**: `python -m sniper.account_session --login` czyści profil bota i otwiera jego okno na
+stronie `SCRAPER_LOGIN_URL` - zaloguj się w nim RĘCZNIE (program niczego nie wpisuje), potem naciśnij ENTER w
+konsoli. Zwykle niepotrzebne: `python -m sniper` / `sniper.account_session` / `sniper.buyer` same pokazują okno do
+logowania, gdy sesji brak. Nie używaj w Vinted „wyloguj ze wszystkich urządzeń”, bo zakończy to też sesję bota.
 
 **Krok 4 - auto-zakup w Zwiadowcy (`sniper/autobuy.py`)**: przy `SNIPER_BUY_ENABLED=true` (i działającej ocenie AI)
 `python -m sniper` uruchamia też zalogowaną przeglądarkę konta. Gdy AI uzna ofertę za okazję z oceną
@@ -201,7 +203,7 @@ zalogowanego. Odpytuje `api/v2/banners` z Twojego domowego IP (BEZ proxy IPRoyal
 4. Po teście wyloguj się w przeglądarce i usuń `my_headers.txt`.
 
 Plik `my_headers.txt` zawiera `access_token_web` = pełny dostęp do konta z kartą. Trzymaj go tylko lokalnie,
-nigdy w repo ani w czacie. Kolejne kroki (link prosto do kasy, potem auto-zakup za limitami) dopiero po tym teście.
+nigdy w repo ani w czacie. To tylko narzędzie diagnostyczne - przeglądarka konta (krok 2+) go NIE używa. Kolejne kroki (link prosto do kasy, potem auto-zakup za limitami) dopiero po tym teście.
 
 ## Logi
 

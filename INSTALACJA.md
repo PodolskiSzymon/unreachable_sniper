@@ -41,6 +41,8 @@ python -m sniper.account_session --login
 ```
 Otworzy się okno Chrome z osobnym profilem bota (`profiles\scraper`) – zaloguj się RĘCZNIE e-mailem i hasłem
 Vinted, potem naciśnij Enter w konsoli. Program nie wpisuje loginu ani hasła.
+Możesz też pominąć ten krok: `python -m sniper` przy braku sesji sam otworzy okno bota na stronie głównej
+Vinted – zaloguj się w nim, a bot wykryje to w kilka sekund (bez Entera i restartu).
 Lista bibliotek: `sniper\requirements.txt`. Do testów dodatkowo: `pip install -r sniper\requirements-dev.txt`.
 
 Za każdym razem przed uruchomieniem w nowym oknie konsoli: `.venv\Scripts\activate`.

@@ -7,33 +7,6 @@ from sniper import account_session as acc
 from sniper.config import AccountConfig, ScoutConfig
 
 
-def test_cookie_header_to_playwright():
-    cookies = acc.cookie_header_to_playwright("a=1; access_token_web=TOK.EN; b=2 ")
-    assert cookies == [
-        {"name": "a", "value": "1", "domain": ".vinted.pl", "path": "/"},
-        {"name": "access_token_web", "value": "TOK.EN", "domain": ".vinted.pl", "path": "/"},
-        {"name": "b", "value": "2", "domain": ".vinted.pl", "path": "/"},
-    ]
-    assert acc.cookie_header_to_playwright("") == []
-    assert acc.cookie_header_to_playwright("smieci_bez_rowna") == []
-
-
-def test_load_account_cookies(tmp_path):
-    f = tmp_path / "my_headers.txt"
-    f.write_text("curl 'https://www.vinted.pl/' -b 'anon_id=abc; access_token_web=T.O.K' "
-                 "-H 'user-agent: Edg/154'", encoding="utf-8")
-    cookies, ua = acc.load_account_cookies(f)
-    names = {c["name"] for c in cookies}
-    assert names == {"anon_id", "access_token_web"} and ua == "Edg/154"
-
-
-def test_load_account_cookies_requires_cookie(tmp_path):
-    f = tmp_path / "my_headers.txt"
-    f.write_text("curl 'https://www.vinted.pl/' -H 'user-agent: Edg/154'", encoding="utf-8")
-    with pytest.raises(ValueError, match="Brak ciastek"):
-        acc.load_account_cookies(f)
-
-
 def _cfg(tmp_path, **kw):
     """Konfiguracja z profilem w tmp_path (domyślny ./profiles/scraper zaśmiecałby katalog roboczy)."""
     kw.setdefault("profile_dir", str(tmp_path / "profiles" / "scraper"))
@@ -44,14 +17,14 @@ def test_account_paths_default(tmp_path, monkeypatch):
     monkeypatch.delenv("SCRAPER_PROFILE_DIR", raising=False)
     cfg = AccountConfig()
     account = acc.VintedAccount(cfg, tmp_path)
-    assert account.headers_file == tmp_path / "my_headers.txt"
+    assert not hasattr(account, "headers_file")                       # my_headers.txt nie jest już używany
     assert account.profile_dir == Path("profiles") / "scraper"          # ./profiles/scraper - osobny profil bota
 
 
 def test_account_paths_from_config(tmp_path):
-    cfg = AccountConfig(headers_file=str(tmp_path / "h.txt"), profile_dir=str(tmp_path / "prof"))
+    cfg = AccountConfig(profile_dir=str(tmp_path / "prof"))
     account = acc.VintedAccount(cfg, tmp_path / "logs")
-    assert account.headers_file == tmp_path / "h.txt" and account.profile_dir == tmp_path / "prof"
+    assert account.profile_dir == tmp_path / "prof" and account.log_dir == tmp_path / "logs"
 
 
 def test_account_disabled_by_default():
@@ -248,76 +221,6 @@ def test_is_checkout_url():
     assert acc.VintedAccount._is_checkout_url("") is False
 
 
-def test_seed_only_new_or_changed_headers(tmp_path):
-    """Stary my_headers.txt nie może nadpisywać odświeżonych tokenów profilu przy każdym starcie."""
-    import asyncio
-    import os
-
-    class FakeContext:
-        def __init__(self):
-            self.added = []
-
-        async def add_cookies(self, cookies):
-            self.added.append(cookies)
-
-    account = acc.VintedAccount(_cfg(tmp_path), tmp_path)
-    account.profile_dir.mkdir(parents=True)
-    account.context = FakeContext()
-    account.headers_file.write_text("curl 'https://www.vinted.pl/' -b 'access_token_web=STARY; a=1'",
-                                    encoding="utf-8")
-    assert account.needs_seed() is True
-    asyncio.run(account._seed_cookies())
-    assert len(account.context.added) == 1                              # pierwszy raz: wgrane
-    assert account.needs_seed() is False
-    asyncio.run(account._seed_cookies())
-    assert len(account.context.added) == 1                              # restart: NIE nadpisuje profilu
-    stat = account.headers_file.stat()
-    os.utime(account.headers_file, ns=(stat.st_atime_ns, stat.st_mtime_ns + 10**9))   # świeży cURL
-    assert account.needs_seed() is True
-    account.reset_profile()
-    account.profile_dir.mkdir(parents=True)
-    assert account.needs_seed() is True                                 # po --reset wgrywa od nowa
-
-
-def test_start_reseeds_when_profile_not_logged_in(tmp_path, monkeypatch):
-    """Profil bez ważnej sesji + pominięte ciastka -> start wgrywa je jeszcze raz i sprawdza ponownie."""
-    import asyncio
-    account = acc.VintedAccount(_cfg(tmp_path), tmp_path)
-    account.profile_dir.mkdir(parents=True)
-    account.headers_file.write_text("curl 'https://www.vinted.pl/' -b 'a=1'", encoding="utf-8")
-    (account.profile_dir / account.SEED_MARKER).write_text(account._headers_stamp(), encoding="utf-8")
-    seeds, checks = [], iter([False, True])
-
-    class FakeCtx:
-        pages = ["strona"]
-
-        def set_default_navigation_timeout(self, ms):
-            pass
-
-        async def add_cookies(self, cookies):
-            seeds.append(cookies)
-
-    class FakeChromium:
-        async def launch_persistent_context(self, **kw):
-            return FakeCtx()
-
-    class FakePW:
-        chromium = FakeChromium()
-
-        async def start(self):
-            return self
-
-    import patchright.async_api as pra
-    monkeypatch.setattr(pra, "async_playwright", lambda: FakePW())
-
-    async def fake_check():
-        return next(checks)
-    monkeypatch.setattr(account, "refresh_and_check", fake_check)
-    asyncio.run(account.start())
-    assert len(seeds) == 1 and account.logged_in is True     # pominięte przy starcie, wgrane po porażce
-    account._lock.release()
-
-
 class _Loc:
     def __init__(self, visible):
         self._visible = visible
@@ -365,7 +268,6 @@ def test_banners_ok_without_account_token_means_logged_out(tmp_path):
     account = acc.VintedAccount(_cfg(tmp_path), tmp_path)
     account.page = GuestPage(login_visible=None)
     account.context = _Ctx([{"name": "anon_id", "value": "x"}])
-    account.headers_file = tmp_path / "brak.txt"                      # needs_seed() = False
     assert asyncio.run(account.refresh_and_check()) is False
 
 
@@ -374,36 +276,7 @@ def test_banners_ok_with_token_and_no_login_button_is_logged_in(tmp_path):
     account = acc.VintedAccount(_cfg(tmp_path), tmp_path)
     account.page = GuestPage(login_visible=False)
     account.context = _Ctx([{"name": "access_token_web", "value": "tok"}])
-    account.headers_file = tmp_path / "brak.txt"
     assert asyncio.run(account.refresh_and_check()) is True
-
-
-def test_own_login_never_uses_my_headers(tmp_path):
-    """Po --login bot ma własną sesję: my_headers.txt (kopia z Edge) nie może jej nadpisać - ani przy starcie,
-    ani przy awaryjnym ponownym wgraniu."""
-    import asyncio
-    account = acc.VintedAccount(_cfg(tmp_path), tmp_path)
-    account.profile_dir.mkdir(parents=True)
-    account.headers_file.write_text("curl 'https://www.vinted.pl/' -b 'access_token_web=KOPIA'", encoding="utf-8")
-    assert account.needs_seed() is True
-    (account.profile_dir / account.OWN_LOGIN_MARKER).write_text("szymooon_koala", encoding="utf-8")
-    assert account.has_own_login() and account.needs_seed() is False
-
-    class Ctx:
-        added = []
-
-        async def add_cookies(self, cookies):
-            self.added.append(cookies)
-    account.context = Ctx()
-    assert asyncio.run(account._seed_cookies(force=True)) == ([], None) and Ctx.added == []
-
-
-def test_no_seeding_while_logging_in(tmp_path):
-    account = acc.VintedAccount(_cfg(tmp_path), tmp_path)
-    account.profile_dir.mkdir(parents=True)
-    account.headers_file.write_text("curl 'https://www.vinted.pl/' -b 'a=1'", encoding="utf-8")
-    account._logging_in = True
-    assert account.needs_seed() is False
 
 
 def test_delay_ranges_from_env(monkeypatch):
@@ -426,3 +299,62 @@ def test_keepalive_pacer_random_with_long_pause():
     assert len(normal) + len(long_) == 200 and all(15 <= m <= 25 for m in normal)
     assert 200 // 18 <= len(long_) <= 200 // 12 + 1                    # dłuższa pauza co kilkanaście wejść
     assert len({round(m, 3) for m in normal}) > 50                      # naprawdę losowe, nie stałe
+
+
+def test_no_my_headers_in_account_session():
+    """Logowanie wyłącznie ręczne w oknie bota - account_session nie czyta my_headers.txt ani nie wgrywa ciastek."""
+    src = Path(acc.__file__).read_text(encoding="utf-8")
+    assert "add_cookies" not in src and "read_headers" not in src and "headers_file" not in src
+
+
+def test_passive_check_does_not_reload_page(tmp_path):
+    """Czekanie na ręczne logowanie: bez goto (przeładowanie przerwałoby wpisywanie hasła)."""
+    import asyncio
+    account = acc.VintedAccount(_cfg(tmp_path), tmp_path)
+    account.page = GuestPage(login_visible=True)
+    account.page.goto_urls.append("https://www.vinted.pl/member/login")
+    assert asyncio.run(account.refresh_and_check(navigate=False)) is False
+    assert account.page.goto_urls == ["https://www.vinted.pl/member/login"]      # strona NIE przeładowana
+
+    account.page = GuestPage(login_visible=False)
+    account.page.goto_urls.append("https://www.vinted.pl/")
+    account.context = _Ctx([{"name": "access_token_web", "value": "tok"}])
+    assert asyncio.run(account.refresh_and_check(navigate=False)) is True
+    assert account.page.goto_urls == ["https://www.vinted.pl/"]
+
+
+def test_start_not_logged_in_keeps_window_and_wait_for_login_detects(tmp_path, monkeypatch):
+    import asyncio
+    from sniper.config import DelayConfig
+    cfg = _cfg(tmp_path, delays=DelayConfig(login_check_s=(0.0, 0.0)))
+    account = acc.VintedAccount(cfg, tmp_path)
+    calls, states = [], iter([False, False, False, True])
+
+    async def fake_launch():
+        calls.append("launch")
+
+    async def fake_check(navigate=True):
+        calls.append(navigate)
+        return next(states)
+
+    async def fake_focus():
+        calls.append("focus")
+    monkeypatch.setattr(account, "_launch", fake_launch)
+    monkeypatch.setattr(account, "refresh_and_check", fake_check)
+    monkeypatch.setattr(account, "focus", fake_focus)
+
+    asyncio.run(account.start())
+    assert account.logged_in is False and calls == ["launch", True, "focus"]   # okno zostaje, na wierzch
+    assert asyncio.run(account.wait_for_login(timeout=5)) is True and account.logged_in is True
+    assert calls[3:] == [False, False, False]                                  # czekanie bez przeładowań
+
+
+def test_wait_for_login_timeout(tmp_path, monkeypatch):
+    import asyncio
+    from sniper.config import DelayConfig
+    account = acc.VintedAccount(_cfg(tmp_path, delays=DelayConfig(login_check_s=(0.01, 0.01))), tmp_path)
+
+    async def never(navigate=True):
+        return False
+    monkeypatch.setattr(account, "refresh_and_check", never)
+    assert asyncio.run(account.wait_for_login(timeout=0.1)) is False
