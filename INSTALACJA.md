@@ -60,3 +60,8 @@ python -m sniper.check_detection       # okno z testami wykrywania bota (do ręc
   i maile.
 * Laptop nie może zasypiać w trakcie pracy (Ustawienia → System → Zasilanie → „Uśpij” = Nigdy, przy zasilaniu
   z sieci) – inaczej Zwiadowca stoi.
+
+## Najprościej: start.bat
+`start.bat` w głównym folderze uruchamia Snipera z jego `.venv` – bez `activate`. Dwuklik w Eksploratorze albo
+w terminalu VS Code: `.\start.bat`. Inne moduły: `.\start.bat notifier`, `.\start.bat account_session --login`,
+`.\start.bat check_detection`.
