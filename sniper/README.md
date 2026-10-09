@@ -115,7 +115,8 @@ i `SNIPER_AI_FALLBACK=false`).
 
 **Krok 2 - sesja konta 24/7** (`python -m sniper.account_session`): osobny program, który trzyma Twoje konto
 zalogowane w stałym profilu bota (Patchright + Google Chrome, `channel="chrome"`, widoczne okno, `no_viewport`,
-domyślna konfiguracja bez własnego user-agenta, nagłówków, skryptów i flag; profil `SCRAPER_PROFILE_DIR`, domyślnie
+domyślna konfiguracja bez własnego user-agenta, nagłówków, skryptów i flag; pasek „Użyto nieobsługiwanej flagi wiersza polecenia: --disable-blink-features=AutomationControlled”
+w oknie jest normalny - tę flagę dodaje sam Patchright i to ona daje `navigator.webdriver = false`; profil `SCRAPER_PROFILE_DIR`, domyślnie
 `./profiles/scraper`; z domowego IP, BEZ proxy). Co 15-25 min (losowo, `SCRAPER_KEEPALIVE_MIN`; co kilkanaście wejść
 dłuższa pauza) wchodzi na stronę - JS Vinted odświeża wtedy token dostępu (żyje ~1 h) refresh-tokenem (żyje ~7 dni), więc sesja nie
 wygasa. Sprawdza przez `api/v2/banners`, czy wciąż jesteś zalogowany. `open_item(url)` otwiera ofertę na koncie -
