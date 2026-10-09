@@ -568,3 +568,28 @@ def test_failed_check_adds_details_to_reason(tmp_path):
     asyncio.run(account._log_failure_details(["403 POST www.vinted.pl/x/token"]))
     assert account.last_reason == ("na stronie widać „Zaloguj się” [refresh_token_web: BRAK; "
                                    "403 POST www.vinted.pl/x/token]")
+
+
+def test_describe_jwt_without_personal_data():
+    import base64
+    import json
+    enc = lambda d: base64.urlsafe_b64encode(json.dumps(d).encode()).decode().rstrip("=")
+    tok = f"{enc({'alg': 'x'})}.{enc({'iat': 1000, 'exp': 1000 + 3600, 'iss': 'vinted-iam-oauth', 'sub': '123456', 'scope': 'user'})}.p"
+    text = acc.describe_jwt(tok)
+    assert "czas życia 60 min" in text and "iss=vinted-iam-oauth" in text and "sub: liczba" in text
+    assert "123456" not in text                                        # bez identyfikatora użytkownika
+    assert acc.describe_jwt("smieci") == "nie JWT"
+
+
+def test_keepalive_without_navigation_mode(tmp_path, monkeypatch):
+    import asyncio
+    from sniper.config import DelayConfig
+    cfg = _cfg(tmp_path, keepalive_navigate=False, delays=DelayConfig(session_fail_checks=1))
+    account = acc.VintedAccount(cfg, tmp_path)
+    calls = []
+
+    async def check(navigate=True, reload_on_token_change=True):
+        calls.append((navigate, reload_on_token_change))
+        return True
+    monkeypatch.setattr(account, "refresh_and_check", check)
+    assert asyncio.run(account.verify_session()) is True and calls == [(False, False)]

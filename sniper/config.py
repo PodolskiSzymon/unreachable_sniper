@@ -357,6 +357,8 @@ class AccountConfig:
     # Sandbox Chrome (zabezpieczenie). Domyślnie WŁĄCZONY - Playwright sam z siebie dodaje --no-sandbox.
     # false tylko gdy Chrome nie startuje (np. Linux jako root).
     chrome_sandbox: bool = _env_bool("SCRAPER_CHROME_SANDBOX", True)
+    # Test diagnostyczny: false = podtrzymanie BEZ przeładowania strony (tylko sprawdzenie z otwartej strony).
+    keepalive_navigate: bool = _env_bool("SCRAPER_KEEPALIVE_NAVIGATE", True)
     delays: DelayConfig = field(default_factory=DelayConfig)
 
 

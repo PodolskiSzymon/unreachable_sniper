@@ -141,6 +141,39 @@ async def launch_profile(profile_dir, nav_timeout=None, sandbox=True):
         raise
 
 
+def jwt_claims(token):
+    """Zawartość (payload) tokenu JWT jako dict albo {}. Bez weryfikacji podpisu - tylko do diagnostyki."""
+    import base64
+    import json
+    try:
+        payload = token.split(".")[1]
+        payload += "=" * (-len(payload) % 4)
+        data = json.loads(base64.urlsafe_b64decode(payload))
+        return data if isinstance(data, dict) else {}
+    except Exception:
+        return {}
+
+
+def describe_jwt(token):
+    """Opis tokenu BEZ danych osobowych: czas życia (exp-iat), iss, scope, czy jest identyfikator użytkownika.
+
+    Pozwala odróżnić token konta od tokenu gościa (Vinted daje access_token_web także gościom).
+    """
+    c = jwt_claims(token)
+    if not c:
+        return "nie JWT"
+    parts = []
+    if isinstance(c.get("exp"), (int, float)) and isinstance(c.get("iat"), (int, float)):
+        parts.append(f"czas życia {(c['exp'] - c['iat']) / 60:.0f} min")
+    for key in ("iss", "scope", "aud"):
+        if key in c:
+            parts.append(f"{key}={str(c[key])[:60]}")
+    sub = c.get("sub")
+    parts.append("sub: " + ("BRAK" if sub in (None, "") else "liczba" if str(sub).isdigit() else "inny"))
+    parts.append("pola: " + ",".join(sorted(c)))
+    return ", ".join(parts)
+
+
 def jwt_expiry(token):
     """Czas wygaśnięcia (epoch, s) z tokenu JWT (pole exp) albo None. Bez weryfikacji podpisu - tylko odczyt."""
     import base64
@@ -337,7 +370,7 @@ class VintedAccount:
         log.error("[KONTO] Nie potwierdziłem zalogowania po %d próbach.", attempts)
         return False
 
-    async def refresh_and_check(self, navigate=True):
+    async def refresh_and_check(self, navigate=True, reload_on_token_change=True):
         """Czy jesteś zalogowany? Zwraca bool.
 
         navigate=True: wchodzi na stronę główną (JS Vinted odświeża wtedy token) - podtrzymanie sesji.
@@ -345,7 +378,7 @@ class VintedAccount:
         (przeładowanie w trakcie wpisywania hasła przerwałoby logowanie).
         """
         if not navigate:
-            return await self._passive_check()
+            return await self._passive_check(reload_on_token_change)
         # Podgląd ruchu odświeżania sesji podczas wejścia na stronę: przy porażce widać, co Vinted odpowiedział
         # (np. 401/403 na odświeżeniu tokenu, captcha DataDome) - bez zgadywania adresów, tylko obserwacja.
         traffic = []
@@ -414,6 +447,7 @@ class VintedAccount:
                 jexp = jwt_expiry(c.get("value") or "")
                 if jexp is not None:
                     text += f", JWT exp za {(jexp - now) / 60:.0f} min"
+                text += f" [{describe_jwt(c.get('value') or '')}]"
             return text
         names = sorted(n for n in by_name if n)
         return "; ".join([life("access_token_web"), life("refresh_token_web")]) + f" | ciastka: {', '.join(names)}"
@@ -510,7 +544,13 @@ class VintedAccount:
         attempts = max(1, int(self.delays.session_fail_checks))
         for i in range(1, attempts + 1):
             try:
-                ok = await self.refresh_and_check()
+                # SCRAPER_KEEPALIVE_NAVIGATE=false: test bez przeładowania strony (czy to wejście na stronę wylogowuje).
+                if getattr(self.cfg, "keepalive_navigate", True):
+                    ok = await self.refresh_and_check()
+                else:
+                    ok = await self.refresh_and_check(navigate=False, reload_on_token_change=False)
+                    if not ok and not self.last_reason:
+                        self.last_reason = "sprawdzenie bez przeładowania: brak sesji (banners/„Zaloguj się”/token)"
                 reason = self.last_reason
             except Exception as exc:
                 ok, reason = False, f"błąd: {str(exc)[:200]}"
@@ -556,7 +596,7 @@ class VintedAccount:
             log.info("[KONTO] Zamknąłem %d dodatkowych kart w oknie bota (jedna karta = jedno odświeżanie tokenu).",
                      len(extra))
 
-    async def _passive_check(self):
+    async def _passive_check(self, reload_on_token_change=True):
         """Sprawdzenie BEZ przeładowania strony (czekamy, aż zalogujesz się ręcznie).
 
         1. /api/v2/banners z obecnej strony - nazwa konta = zalogowany.
@@ -570,7 +610,7 @@ class VintedAccount:
         token = await self._account_token()
         token_changed = self._last_token is not None and token and token != self._last_token
         self._last_token = token
-        if token_changed:
+        if token_changed and reload_on_token_change:
             log.info("[KONTO] Nowy token konta w przeglądarce (koniec logowania?) - sprawdzam z przeładowaniem strony.")
             return await self.refresh_and_check(navigate=True)
 
