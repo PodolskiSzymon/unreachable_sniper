@@ -180,7 +180,9 @@ class AutoBuyer:
         async with self._lock:
             try:
                 if self.ready:
-                    alive = await self.account.refresh_and_check()
+                    # Z ponowieniami: „padła” dopiero po kilku nieudanych sprawdzeniach z rzędu.
+                    verify = getattr(self.account, "verify_session", None)
+                    alive = await (verify() if verify else self.account.refresh_and_check())
                 else:
                     alive = await self.account.refresh_and_check(navigate=False)
             except Exception:
@@ -216,6 +218,14 @@ class AutoBuyer:
         pacer = KeepalivePacer(self.delays)
         while True:
             # Wstrzymany auto-zakup = czekamy na Twoje logowanie w oknie: sprawdzanie co kilka s, bez przeładowania.
-            delay = pacer.next_seconds() if self.ready else DelayConfig.pick(self.delays.login_check_s)
+            if self.ready:
+                # Przed wygaśnięciem tokenu dostępu (exp z JWT), nie w losowej chwili.
+                planner = getattr(self.account, "next_keepalive_delay", None)
+                try:
+                    delay = await planner(pacer) if planner else pacer.next_seconds()
+                except Exception:
+                    delay = pacer.next_seconds()
+            else:
+                delay = DelayConfig.pick(self.delays.login_check_s)
             await asyncio.sleep(delay)
             await self.check_session()

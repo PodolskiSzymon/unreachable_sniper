@@ -304,6 +304,12 @@ class DelayConfig:
     long_pause_min: tuple = _env_range("SCRAPER_LONG_PAUSE_MIN", (40.0, 60.0))
     # Czekanie na Twoje ręczne logowanie w oknie bota: sprawdzanie co tyle SEKUND (bez przeładowania strony).
     login_check_s: tuple = _env_range("SCRAPER_LOGIN_CHECK_S", (5.0, 10.0))
+    # Odśwież sesję (wejście na stronę) na tyle MINUT przed wygaśnięciem tokenu dostępu (exp z JWT, żyje ~1 h).
+    refresh_ahead_min: tuple = _env_range("SCRAPER_REFRESH_AHEAD_MIN", (8.0, 12.0))
+    # Sesja „padła” dopiero po tylu nieudanych sprawdzeniach Z RZĘDU (jedno potknięcie = chwilowy błąd, nie wylogowanie),
+    # z przerwą tyle SEKUND między nimi.
+    session_fail_checks: int = _env_int("SCRAPER_SESSION_FAIL_CHECKS", 3)
+    session_retry_s: tuple = _env_range("SCRAPER_SESSION_RETRY_S", (30.0, 60.0))
     # Krótka pauza przed kliknięciem / po hydracji strony (s) i przed ponowieniem kliku (s).
     click_s: tuple = _env_range("SCRAPER_CLICK_DELAY_S", (0.8, 2.0))
     retry_s: tuple = _env_range("SCRAPER_RETRY_DELAY_S", (1.5, 3.0))

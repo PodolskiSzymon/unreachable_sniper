@@ -397,3 +397,88 @@ def test_passive_check_logs_reason_once_a_minute(tmp_path, caplog):
         asyncio.run(account.refresh_and_check(navigate=False))
     lines = [r.getMessage() for r in caplog.records if "Czekam na logowanie" in r.getMessage()]
     assert len(lines) == 1 and "„Zaloguj się” na stronie: TAK" in lines[0] and "token konta: BRAK" in lines[0]
+
+
+def _jwt(exp):
+    import base64
+    import json
+    enc = lambda d: base64.urlsafe_b64encode(json.dumps(d).encode()).decode().rstrip("=")
+    return f"{enc({'alg': 'HS256'})}.{enc({'exp': exp, 'iss': 'vinted-iam-oauth'})}.podpis"
+
+
+def test_jwt_expiry():
+    assert acc.jwt_expiry(_jwt(1760000000)) == 1760000000
+    assert acc.jwt_expiry("smieci") is None and acc.jwt_expiry("") is None
+
+
+def test_keepalive_refreshes_ahead_of_token_expiry(tmp_path):
+    """Token wygasa za 20 min -> następne podtrzymanie ~8-12 min wcześniej, nie po losowych 15-25 min."""
+    import asyncio
+    import time
+    from sniper.config import DelayConfig, KeepalivePacer
+    d = DelayConfig(keepalive_min=(15.0, 25.0), long_pause_every=(100.0, 100.0), refresh_ahead_min=(10.0, 10.0))
+    account = acc.VintedAccount(_cfg(tmp_path, delays=d), tmp_path)
+    account.context = _Ctx([{"name": "access_token_web", "value": _jwt(time.time() + 20 * 60)}])
+    delay = asyncio.run(account.next_keepalive_delay(KeepalivePacer(d)))
+    assert 9 * 60 <= delay <= 10 * 60 + 5                               # 20 min - 10 min zapasu
+    account.context = _Ctx([{"name": "access_token_web", "value": _jwt(time.time() + 60)}])
+    assert asyncio.run(account.next_keepalive_delay(KeepalivePacer(d))) == 60.0   # minimum 1 min
+    account.context = _Ctx([])                                          # bez tokenu - zwykły losowy odstęp
+    assert 15 * 60 <= asyncio.run(account.next_keepalive_delay(KeepalivePacer(d))) <= 25 * 60
+
+
+def test_verify_session_needs_several_failures_in_a_row(tmp_path, monkeypatch):
+    """Jedno potknięcie (np. strona w trakcie odświeżania tokenu) to NIE wylogowanie."""
+    import asyncio
+    from sniper.config import DelayConfig
+    d = DelayConfig(session_fail_checks=3, session_retry_s=(0.0, 0.0))
+    account = acc.VintedAccount(_cfg(tmp_path, delays=d), tmp_path)
+    results = iter([False, RuntimeError("Execution context was destroyed"), True])
+    calls = []
+
+    async def check(navigate=True):
+        calls.append(navigate)
+        r = next(results)
+        if isinstance(r, Exception):
+            raise r
+        account.last_reason = "banners: status 0"
+        return r
+    monkeypatch.setattr(account, "refresh_and_check", check)
+    assert asyncio.run(account.verify_session()) is True and len(calls) == 3
+
+    calls.clear()
+    results = iter([False, False, False])
+    assert asyncio.run(account.verify_session()) is False and len(calls) == 3
+
+
+def test_single_tab_before_refresh(tmp_path):
+    import asyncio
+
+    class P:
+        def __init__(self):
+            self.closed = False
+
+        def is_closed(self):
+            return self.closed
+
+        async def close(self):
+            self.closed = True
+
+    class C:
+        def __init__(self, pages):
+            self._pages = pages
+
+        @property
+        def pages(self):
+            return [p for p in self._pages if not p.closed]
+
+    main, extra1, extra2 = P(), P(), P()
+    account = acc.VintedAccount(_cfg(tmp_path), tmp_path)
+    account.context, account.page = C([main, extra1, extra2]), main
+    asyncio.run(account._ensure_single_tab())
+    assert account.context.pages == [main] and account.page is main
+    main.closed = True                                                  # użytkownik zamknął kartę bota
+    other = P()
+    account.context = C([other])
+    asyncio.run(account._ensure_single_tab())
+    assert account.page is other

@@ -141,6 +141,18 @@ async def launch_profile(profile_dir, nav_timeout=None, sandbox=True):
         raise
 
 
+def jwt_expiry(token):
+    """Czas wygaśnięcia (epoch, s) z tokenu JWT (pole exp) albo None. Bez weryfikacji podpisu - tylko odczyt."""
+    import base64
+    import json
+    try:
+        payload = token.split(".")[1]
+        payload += "=" * (-len(payload) % 4)
+        return float(json.loads(base64.urlsafe_b64decode(payload))["exp"])
+    except Exception:
+        return None
+
+
 LOGIN_HELP = (
     "1. W oknie Chrome bota kliknij „Zaloguj się” i wybierz logowanie E-MAILEM i HASŁEM Vinted.\n"
     "   NIE „Kontynuuj z Google/Facebook/Apple” - Google blokuje logowanie w przeglądarce sterowanej\n"
@@ -163,6 +175,7 @@ class VintedAccount:
         self.username = None
         self.logged_in = False
         self._last_token = None                     # do wykrycia końca logowania (zmiana access_token_web)
+        self.last_reason = ""                       # dlaczego ostatnie sprawdzenie sesji się nie udało
         self._last_diag = float("-inf")             # ostatnia linia diagnostyczna przy czekaniu na logowanie
 
     async def start(self):
@@ -244,8 +257,10 @@ class VintedAccount:
         if not navigate:
             return await self._passive_check()
         if navigate:
+            await self._ensure_single_tab()
             await self.page.goto(HOME_URL, wait_until="domcontentloaded")
             if await self._stuck_on_session_refresh():
+                self.last_reason = "strona utknęła na /session-refresh"
                 log.warning("[KONTO] Pętla 'session-refresh' - sesja w profilu jest nieważna. Zaloguj się "
                             "ponownie w oknie bota (albo: zatrzymaj program i python -m sniper.account_session "
                             "--login, czyści profil).")
@@ -254,6 +269,7 @@ class VintedAccount:
         result = await self.page.evaluate(_BANNERS_FETCH, BANNERS_PATH)
         status, body = result.get("status"), result.get("body") or ""
         if status == 401:
+            self.last_reason = "401 z /api/v2/banners"
             if not quiet:
                 log.warning("[KONTO] 401 - sesja wygasła. Zaloguj się ponownie w oknie bota.")
             self.username = None
@@ -266,6 +282,7 @@ class VintedAccount:
         # /api/v2/banners odpowiada 200/code:0 także NIEZALOGOWANEMU gościowi - samo to nie dowodzi sesji.
         # Dodatkowo: brak widocznego „Zaloguj się” na stronie i ciastko konta access_token_web.
         if status != 200 or '"code":0' not in body:
+            self.last_reason = f"banners: status {status} (0 = zapytanie przerwane, np. przekierowanie)"
             if not quiet:
                 log.info("[KONTO] Sesja niepewna (banner bez nazwy, status %s) - traktuję jako niezalogowany.",
                          status)
@@ -274,6 +291,7 @@ class VintedAccount:
         login_button = await self._login_button_visible()
         has_token = await self._has_account_token()
         if login_button or has_token is False:
+            self.last_reason = ("na stronie widać „Zaloguj się”" if login_button else "brak ciastka access_token_web")
             if not quiet:
                 log.warning("[KONTO] NIE jesteś zalogowany (%s). Zaloguj się w oknie bota (strona główna Vinted).",
                             "na stronie jest „Zaloguj się”" if login_button else "brak ciastka access_token_web")
@@ -290,6 +308,71 @@ class VintedAccount:
         except Exception:
             return None
         return next((c.get("value") for c in cookies if c.get("name") == "access_token_web"), None)
+
+    async def token_expires_in(self):
+        """Ile sekund zostało do wygaśnięcia tokenu dostępu (access_token_web, JWT exp). None = nie wiadomo."""
+        import time as _t
+        exp = jwt_expiry(await self._account_token() or "")
+        return None if exp is None else exp - _t.time()
+
+    async def next_keepalive_delay(self, pacer):
+        """Odstęp do następnego podtrzymania: losowy (pacer), ale ZAWSZE przed wygaśnięciem tokenu dostępu.
+
+        Wzorzec „refresh ahead of expiry” z aplikacji OAuth: odświeżamy ~8-12 min przed exp, a nie w losowej chwili
+        - wtedy JS Vinted wymienia token refresh-tokenem, zanim stary przestanie działać.
+        """
+        delay = pacer.next_seconds()
+        left = await self.token_expires_in()
+        if left is not None:
+            ahead = DelayConfig.pick(self.delays.refresh_ahead_min) * 60
+            delay = min(delay, max(60.0, left - ahead))
+        return delay
+
+    async def verify_session(self):
+        """Podtrzymanie z ponowieniami: sesja „padła” dopiero po N nieudanych sprawdzeniach Z RZĘDU.
+
+        Pojedyncza porażka (strona w trakcie odświeżania tokenu, przerwane zapytanie, chwilowy błąd sieci) to nie
+        wylogowanie - wcześniej jedna taka porażka od razu wstrzymywała auto-zakup i wysyłała mail.
+        """
+        attempts = max(1, int(self.delays.session_fail_checks))
+        for i in range(1, attempts + 1):
+            try:
+                ok = await self.refresh_and_check()
+                reason = self.last_reason
+            except Exception as exc:
+                ok, reason = False, f"błąd: {str(exc)[:200]}"
+            if ok:
+                if i > 1:
+                    log.info("[KONTO] Sesja potwierdzona w próbie %d/%d - poprzednia porażka była chwilowa.", i, attempts)
+                left = await self.token_expires_in()
+                if left is not None:
+                    log.info("[KONTO] Token konta ważny jeszcze ~%.0f min.", left / 60)
+                return True
+            log.warning("[KONTO] Sprawdzenie sesji nieudane (%d/%d): %s", i, attempts, reason or "?")
+            if i < attempts:
+                await self._pause(self.delays.session_retry_s)
+        return False
+
+    async def _ensure_single_tab(self):
+        """Jedna karta w oknie bota. Każda karta Vinted odświeża token sama, a Vinted rotuje refresh token -
+        dwa odświeżenia tym samym refresh tokenem (dwie karty naraz) to w OAuth sygnał kradzieży i unieważnienie sesji.
+        """
+        ctx = self.context
+        pages = list(getattr(ctx, "pages", None) or [])
+        if not pages and ctx is None:
+            return
+        closed = getattr(self.page, "is_closed", None)
+        if self.page is None or (closed and closed()):
+            self.page = pages[0] if pages else await ctx.new_page()
+        extra = [p for p in pages if p is not self.page]
+        for p in extra:
+            try:
+                await p.close()
+            except Exception:
+                pass
+        if extra:
+            log.info("[KONTO] Zamknąłem %d dodatkowych kart w oknie bota (jedna karta = jedno odświeżanie tokenu).",
+                     len(extra))
 
     async def _passive_check(self):
         """Sprawdzenie BEZ przeładowania strony (czekamy, aż zalogujesz się ręcznie).
@@ -370,7 +453,8 @@ class VintedAccount:
         if not self.is_session_refresh(self.page.url):
             return False
         try:
-            await self.page.wait_for_url(lambda u: not self.is_session_refresh(u), timeout=15000)
+            # /session-refresh to właśnie odświeżanie tokenu przez Vinted - dajemy mu czas (było 15 s).
+            await self.page.wait_for_url(lambda u: not self.is_session_refresh(u), timeout=45000)
             return False
         except Exception:
             return self.is_session_refresh(self.page.url)
@@ -780,9 +864,9 @@ class VintedAccount:
         log.info("[KONTO] Podtrzymuję sesję co %.0f-%.0f min (losowo, czasem dłuższa pauza). Ctrl+C kończy.",
                  low, high)
         while True:
-            await asyncio.sleep(pacer.next_seconds())
+            await asyncio.sleep(await self.next_keepalive_delay(pacer))
             try:
-                self.logged_in = await self.refresh_and_check()
+                self.logged_in = await self.verify_session()
                 if not self.logged_in:
                     await self.focus()
                     log.warning("[KONTO] Sesja padła - zaloguj się ponownie w oknie bota, czekam.")
