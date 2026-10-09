@@ -528,3 +528,43 @@ def test_verify_session_writes_journal(tmp_path, monkeypatch):
         rows = list(csv.DictReader(f, delimiter=";"))
     assert [r["zdarzenie"] for r in rows] == ["sprawdzenie_nieudane", "sprawdzenie_ok"]
     assert "próba 1/2: banners: status 0" in rows[0]["powod"]
+
+
+def test_cookie_report_shows_lifetimes_without_values(tmp_path):
+    import asyncio
+    import time
+    account = acc.VintedAccount(_cfg(tmp_path), tmp_path)
+    now = time.time()
+    account.context = _Ctx([
+        {"name": "access_token_web", "value": _jwt(now + 50 * 60), "expires": now + 50 * 60},
+        {"name": "refresh_token_web", "value": "SEKRET", "expires": -1},
+        {"name": "datadome", "value": "dd", "expires": now + 3600},
+    ])
+    report = asyncio.run(account.cookie_report())
+    assert "access_token_web: ciastko wygasa za 50 min, JWT exp za 50 min" in report
+    assert "refresh_token_web: ciastko sesyjne" in report and "datadome" in report
+    assert "SEKRET" not in report                                     # nigdy wartości ciastek
+    account.context = _Ctx([])
+    assert "refresh_token_web: BRAK" in asyncio.run(account.cookie_report())
+
+
+def test_auth_traffic_filter():
+    from types import SimpleNamespace as NS
+    line = acc.VintedAccount._auth_traffic_line
+    req = NS(method="POST")
+    assert line(NS(url="https://www.vinted.pl/web/api/auth/refresh?x=1", status=401, request=req)) == \
+        "401 POST www.vinted.pl/web/api/auth/refresh"
+    assert line(NS(url="https://geo.captcha-delivery.com/captcha/", status=200, request=req)).startswith("200 POST")
+    assert line(NS(url="https://www.vinted.pl/api/v2/items/1", status=403, request=req)) is not None   # 403 zawsze
+    assert line(NS(url="https://www.vinted.pl/api/v2/items/1", status=200, request=req)) is None
+    assert line(NS(url="https://static.vinted.pl/session.js", status=200, request=req)) is None       # statyczne
+
+
+def test_failed_check_adds_details_to_reason(tmp_path):
+    import asyncio
+    account = acc.VintedAccount(_cfg(tmp_path), tmp_path)
+    account.context = _Ctx([{"name": "anon_id", "value": "x"}])
+    account.last_reason = "na stronie widać „Zaloguj się”"
+    asyncio.run(account._log_failure_details(["403 POST www.vinted.pl/x/token"]))
+    assert account.last_reason == ("na stronie widać „Zaloguj się” [refresh_token_web: BRAK; "
+                                   "403 POST www.vinted.pl/x/token]")

@@ -266,6 +266,7 @@ class VintedAccount:
         self._last_token = None                     # do wykrycia końca logowania (zmiana access_token_web)
         self.last_reason = ""                       # dlaczego ostatnie sprawdzenie sesji się nie udało
         self.journal = SessionJournal(self.log_dir)  # logs/session_events.csv - kiedy i dlaczego sesja pada
+        self.last_auth_traffic = []                 # zapytania o token/sesję z ostatniego wejścia na stronę
         self._last_diag = float("-inf")             # ostatnia linia diagnostyczna przy czekaniu na logowanie
 
     async def start(self):
@@ -343,25 +344,109 @@ class VintedAccount:
         navigate=False: tylko patrzy na obecną stronę, bez przeładowania - gdy czekamy, aż zalogujesz się ręcznie
         (przeładowanie w trakcie wpisywania hasła przerwałoby logowanie).
         """
-        quiet = not navigate
         if not navigate:
             return await self._passive_check()
-        if navigate:
-            await self._ensure_single_tab()
-            await self.page.goto(HOME_URL, wait_until="domcontentloaded")
-            if await self._stuck_on_session_refresh():
-                self.last_reason = "strona utknęła na /session-refresh"
-                log.warning("[KONTO] Pętla 'session-refresh' - sesja w profilu jest nieważna. Zaloguj się "
-                            "ponownie w oknie bota (albo: zatrzymaj program i python -m sniper.account_session "
-                            "--login, czyści profil).")
-                self.username = None
-                return False
+        # Podgląd ruchu odświeżania sesji podczas wejścia na stronę: przy porażce widać, co Vinted odpowiedział
+        # (np. 401/403 na odświeżeniu tokenu, captcha DataDome) - bez zgadywania adresów, tylko obserwacja.
+        traffic = []
+
+        def on_response(response):
+            try:
+                line = self._auth_traffic_line(response)
+            except Exception:
+                line = None
+            if line and len(traffic) < 40:
+                traffic.append(line)
+        ctx = self.context
+        listening = ctx is not None and hasattr(ctx, "on")
+        if listening:
+            ctx.on("response", on_response)
+        try:
+            ok = await self._navigate_check()
+        finally:
+            if listening:
+                try:
+                    ctx.remove_listener("response", on_response)
+                except Exception:
+                    pass
+        self.last_auth_traffic = traffic
+        if not ok:
+            await self._log_failure_details(traffic)
+        return ok
+
+    # Fragmenty adresów zapytań związanych z sesją / ochroną anty-bot (tylko do logu diagnostycznego).
+    _AUTH_HINTS = ("token", "refresh", "session", "oauth", "auth", "login", "logout", "captcha", "datadome",
+                   "challenge")
+    _STATIC = (".js", ".css", ".png", ".jpg", ".jpeg", ".webp", ".svg", ".woff", ".woff2", ".ico", ".gif")
+
+    @classmethod
+    def _auth_traffic_line(cls, response):
+        url = response.url or ""
+        path = url.split("?")[0].lower()
+        if path.endswith(cls._STATIC):
+            return None
+        status = response.status
+        if not (any(h in path for h in cls._AUTH_HINTS) or status in (401, 403, 429)):
+            return None
+        method = getattr(getattr(response, "request", None), "method", "?")
+        short = path.replace("https://", "").replace("http://", "")
+        return f"{status} {method} {short[:120]}"
+
+    async def cookie_report(self):
+        """Ważność ciastek sesji (BEZ wartości): JWT exp tokenu dostępu i daty wygaśnięcia ciastek."""
+        import time as _t
+        if self.context is None:
+            return "brak przeglądarki"
+        try:
+            cookies = await self.context.cookies("https://www.vinted.pl")
+        except Exception as exc:
+            return f"nie odczytałem ciastek ({exc})"
+        by_name = {c.get("name"): c for c in cookies}
+        now = _t.time()
+
+        def life(name):
+            c = by_name.get(name)
+            if c is None:
+                return f"{name}: BRAK"
+            exp = c.get("expires", -1)
+            text = f"{name}: ciastko " + ("sesyjne" if exp is None or exp < 0 else f"wygasa za {(exp - now) / 60:.0f} min")
+            if name == "access_token_web":
+                jexp = jwt_expiry(c.get("value") or "")
+                if jexp is not None:
+                    text += f", JWT exp za {(jexp - now) / 60:.0f} min"
+            return text
+        names = sorted(n for n in by_name if n)
+        return "; ".join([life("access_token_web"), life("refresh_token_web")]) + f" | ciastka: {', '.join(names)}"
+
+    async def _log_failure_details(self, traffic):
+        report = await self.cookie_report()
+        log.warning("[KONTO] Szczegóły nieudanego sprawdzenia - %s", report)
+        if traffic:
+            log.warning("[KONTO] Ruch sesji / anty-bot podczas wejścia na stronę: %s", " | ".join(traffic))
+        else:
+            log.warning("[KONTO] Ruch sesji / anty-bot podczas wejścia na stronę: brak zapytań o token/sesję "
+                        "(strona nie próbowała odświeżyć tokenu).")
+        refresh = "refresh_token_web: BRAK" if "refresh_token_web: BRAK" in report else ""
+        extra = "; ".join(x for x in (refresh, ", ".join(traffic[:4])) if x)
+        if extra:
+            self.last_reason = f"{self.last_reason} [{extra}]"
+
+    async def _navigate_check(self):
+        """Wejście na stronę główną (JS Vinted odświeża wtedy token) + sprawdzenie, czy jesteś zalogowany."""
+        await self._ensure_single_tab()
+        await self.page.goto(HOME_URL, wait_until="domcontentloaded")
+        if await self._stuck_on_session_refresh():
+            self.last_reason = "strona utknęła na /session-refresh"
+            log.warning("[KONTO] Pętla 'session-refresh' - sesja w profilu jest nieważna. Zaloguj się "
+                        "ponownie w oknie bota (albo: zatrzymaj program i python -m sniper.account_session "
+                        "--login, czyści profil).")
+            self.username = None
+            return False
         result = await self.page.evaluate(_BANNERS_FETCH, BANNERS_PATH)
         status, body = result.get("status"), result.get("body") or ""
         if status == 401:
             self.last_reason = "401 z /api/v2/banners"
-            if not quiet:
-                log.warning("[KONTO] 401 - sesja wygasła. Zaloguj się ponownie w oknie bota.")
+            log.warning("[KONTO] 401 - sesja wygasła. Zaloguj się ponownie w oknie bota.")
             self.username = None
             return False
         _, name = detect_banners(body)
@@ -373,18 +458,16 @@ class VintedAccount:
         # Dodatkowo: brak widocznego „Zaloguj się” na stronie i ciastko konta access_token_web.
         if status != 200 or '"code":0' not in body:
             self.last_reason = f"banners: status {status} (0 = zapytanie przerwane, np. przekierowanie)"
-            if not quiet:
-                log.info("[KONTO] Sesja niepewna (banner bez nazwy, status %s) - traktuję jako niezalogowany.",
-                         status)
+            log.info("[KONTO] Sesja niepewna (banner bez nazwy, status %s) - traktuję jako niezalogowany.",
+                     status)
             self.username = None
             return False
         login_button = await self._login_button_visible()
         has_token = await self._has_account_token()
         if login_button or has_token is False:
             self.last_reason = ("na stronie widać „Zaloguj się”" if login_button else "brak ciastka access_token_web")
-            if not quiet:
-                log.warning("[KONTO] NIE jesteś zalogowany (%s). Zaloguj się w oknie bota (strona główna Vinted).",
-                            "na stronie jest „Zaloguj się”" if login_button else "brak ciastka access_token_web")
+            log.warning("[KONTO] NIE jesteś zalogowany (%s). Zaloguj się w oknie bota (strona główna Vinted).",
+                        "na stronie jest „Zaloguj się”" if login_button else "brak ciastka access_token_web")
             self.username = None
             return False
         log.info("[KONTO] Sesja aktywna (banner bez nazwy, ale bez „Zaloguj się” i z tokenem konta).")
@@ -437,6 +520,7 @@ class VintedAccount:
                     log.info("[KONTO] Sesja potwierdzona w próbie %d/%d - poprzednia porażka była chwilowa.", i, attempts)
                 if left is not None:
                     log.info("[KONTO] Token konta ważny jeszcze ~%.0f min.", left / 60)
+                log.info("[KONTO] Ciastka sesji: %s", await self.cookie_report())
                 self.journal.checked_ok(self.username or "konto", left)
                 return True
             log.warning("[KONTO] Sprawdzenie sesji nieudane (%d/%d): %s", i, attempts, reason or "?")
@@ -493,7 +577,11 @@ class VintedAccount:
         url = self.page.url or ""
         status, name, login_button = None, None, None
         if "vinted." in url and not self.is_session_refresh(url):
-            result = await self.page.evaluate(_BANNERS_FETCH, BANNERS_PATH)
+            try:
+                result = await self.page.evaluate(_BANNERS_FETCH, BANNERS_PATH)
+            except Exception as exc:                    # np. strona przeładowuje się w trakcie logowania
+                log.debug("[KONTO] Sprawdzenie w trakcie nawigacji (%s) - ponowię.", exc)
+                return False
             status, body = result.get("status"), result.get("body") or ""
             _, name = detect_banners(body)
             if name:
