@@ -1,6 +1,6 @@
 # Vinted Sniper – kontekst projektu (dla nowej rozmowy z Claude)
 
-Stan na 2026-10-02. MVP działa na komputerze użytkownika (Windows, Python 3.12, folder `F:\WEBSCRAPER`):
+Stan na 2026-10-02. MVP działa na komputerze użytkownika (Windows, Python 3.12, folder `C:\Users\Szymek\unreachable_sniper`, origin = github.com/PodolskiSzymon/unreachable_sniper; `F:\WEBSCRAPER` to INNY, stary projekt Sniperv2 z osobnym repo - nie mylić):
 wykrywa nowo dodane oferty w kategorii Vinted, sprawdza je, ocenia modelem AI (Gemini lub Claude) wg wytycznych
 użytkownika (`sniper/guidelines.md`) i wysyła mail o okazjach. Moduł AI dodany 2026-10-03 (użytkownik wybrał Gemini z Google AI Studio) – czeka na test u użytkownika.
 
