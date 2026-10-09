@@ -1,5 +1,6 @@
 """Konfiguracja Zwiadowcy - wszystko z zmiennych środowiskowych (lub pliku sniper/.env)."""
 import os
+import random
 from dataclasses import dataclass, field
 from pathlib import Path
 from urllib.parse import quote
@@ -277,35 +278,78 @@ MODEL_PRICES = {
 }
 
 
+def _env_range(name, default):
+    """Zakres "a-b" (np. "4-12") -> (a, b) jako float. Błędny / pusty -> default; odwrócony -> zamieniony."""
+    value = _env(name)
+    if not value:
+        return default
+    try:
+        low, high = (float(x.replace(",", ".")) for x in value.split("-", 1))
+    except ValueError:
+        return default
+    return (min(low, high), max(low, high)) if low >= 0 else default
+
+
+@dataclass(frozen=True)
+class DelayConfig:
+    """WSZYSTKIE losowe przerwy przeglądarki konta w jednym miejscu (zamiast stałych sleep).
+
+    Pętle, które co 0,5 s sprawdzają, czy strona już zareagowała, zostają stałe - to czekanie na wynik,
+    nie przerwa. Kliki przy zakupie mają krótkie zakresy celowo: 4-12 s przy „Zapłać” = ktoś kupi szybciej.
+    """
+    # Podtrzymanie sesji: wejście na stronę co tyle MINUT (losowo z zakresu).
+    keepalive_min: tuple = _env_range("SCRAPER_KEEPALIVE_MIN", (15.0, 25.0))
+    # Co ile wejść (losowo z zakresu) dłuższa pauza i ile MINUT trwa (zamiast zwykłej przerwy).
+    long_pause_every: tuple = _env_range("SCRAPER_LONG_PAUSE_EVERY", (12.0, 18.0))
+    long_pause_min: tuple = _env_range("SCRAPER_LONG_PAUSE_MIN", (40.0, 60.0))
+    # Sesja padła (auto-zakup wstrzymany): sprawdzanie częściej, co tyle SEKUND.
+    session_lost_check_s: tuple = _env_range("SCRAPER_SESSION_LOST_CHECK_S", (90.0, 150.0))
+    # Krótka pauza przed kliknięciem / po hydracji strony (s) i przed ponowieniem kliku (s).
+    click_s: tuple = _env_range("SCRAPER_CLICK_DELAY_S", (0.8, 2.0))
+    retry_s: tuple = _env_range("SCRAPER_RETRY_DELAY_S", (1.5, 3.0))
+
+    @staticmethod
+    def pick(bounds):
+        return random.uniform(*bounds)
+
+
+class KeepalivePacer:
+    """Losowe odstępy podtrzymania sesji: zwykle keepalive_min, co kilkanaście wejść dłuższa pauza."""
+
+    def __init__(self, delays: DelayConfig):
+        self.delays = delays
+        self.visits = 0
+        self._next_long = self._draw_long()
+
+    def _draw_long(self):
+        low, high = self.delays.long_pause_every
+        return max(1, round(random.uniform(low, high)))
+
+    def next_seconds(self):
+        self.visits += 1
+        if self.visits >= self._next_long:
+            self.visits, self._next_long = 0, self._draw_long()
+            return DelayConfig.pick(self.delays.long_pause_min) * 60
+        return DelayConfig.pick(self.delays.keepalive_min) * 60
+
+
 @dataclass(frozen=True)
 class AccountConfig:
-    """Sesja TWOJEGO konta Vinted (auto-zakup) - osobny program sniper.account_session.
+    """Sesja TWOJEGO konta Vinted (auto-zakup) - sniper.account_session, przeglądarka Patchright.
 
     Idzie z domowego IP, NIGDY przez proxy IPRoyal (sesja konta i ciastka anty-botowe są związane z Twoim IP).
-    Logowanie: ciastka z pliku (SNIPER_ACCOUNT_HEADERS_FILE) wczytane do trwałego profilu Chromium;
-    stronę odświeża jej własny JS, więc token podtrzymuje się sam (refresh_token żyje ~7 dni).
+    Osobny, stały profil bota (SCRAPER_PROFILE_DIR) - NIE Twój główny profil Chrome/Edge. Logowanie raz ręcznie:
+    python -m sniper.account_session --login. Stronę odświeża jej własny JS, więc token podtrzymuje się sam.
     """
     enabled: bool = _env_bool("SNIPER_ACCOUNT_ENABLED", False)
     headers_file: str = _env("SNIPER_ACCOUNT_HEADERS_FILE")   # domyślnie <log_dir>/my_headers.txt (ustalane niżej)
-    profile_dir: str = _env("SNIPER_ACCOUNT_PROFILE_DIR")     # domyślnie <log_dir>/account_profile
-    # Widoczne okno przeglądarki: przy pierwszym logowaniu / captchy wygodniej je widzieć (false).
-    headless: bool = _env_bool("SNIPER_ACCOUNT_HEADLESS", False)
-    # Co ile minut wejść na stronę, żeby podtrzymać sesję (JS Vinted odświeża wtedy token dostępu ~1 h).
-    keepalive_min: float = _env_float("SNIPER_ACCOUNT_KEEPALIVE_MIN", 20.0)
+    # Folder profilu bota (ciastka sesji konta!). Względny = od folderu, z którego uruchamiasz program.
+    profile_dir: str = _env("SCRAPER_PROFILE_DIR", "./profiles/scraper")
+    # Strona otwierana przy --login (logujesz się na niej ręcznie).
+    login_url: str = _env("SCRAPER_LOGIN_URL", "https://www.vinted.pl/")
     # Limit czasu jednej nawigacji (s).
     nav_timeout: float = _env_float("SNIPER_ACCOUNT_NAV_TIMEOUT", 45.0)
-    # Ścieżka do chrome.exe - tylko gdy Playwright nie znajduje przeglądarki sam (puste = automatycznie).
-    chrome_path: str = _env("SNIPER_ACCOUNT_CHROME_PATH")
-    # Rozmiar okna strony (viewport) w px: "szerokość x wysokość". Okno systemowe jest nieco większe (pasek przeglądarki).
-    viewport: str = _env("SNIPER_ACCOUNT_VIEWPORT", "1280x900")
-
-    @property
-    def viewport_size(self):
-        try:
-            w, h = self.viewport.lower().split("x", 1)
-            return {"width": int(w), "height": int(h)}
-        except (ValueError, AttributeError):
-            return {"width": 1280, "height": 900}
+    delays: DelayConfig = field(default_factory=DelayConfig)
 
 
 @dataclass(frozen=True)

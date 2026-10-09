@@ -208,7 +208,7 @@ async def _cli(argv=None):
     import asyncio
     import logging
 
-    from .account_session import VintedAccount
+    from .account_session import ProfileInUseError, VintedAccount
     from .config import ScoutConfig
 
     parser = argparse.ArgumentParser(description="Test: auto-zakup na wklejonym linku.")
@@ -240,7 +240,11 @@ async def _cli(argv=None):
         print(f"Usunąłem z rejestru bought.jsonl {removed} wpis(ów) oferty {match.group(1)}.")
     account = VintedAccount(cfg.account, cfg.log_dir)
     try:
-        await account.start()
+        try:
+            await account.start()
+        except ProfileInUseError as exc:
+            print(f"\nBŁĄD: {exc}")
+            return 2
         if not account.username:
             print("Nie potwierdziłem zalogowania - sprawdź my_headers.txt (świeży cURL) i spróbuj --reset.")
             return 1

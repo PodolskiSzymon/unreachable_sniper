@@ -3,21 +3,25 @@
 Działa z domowego IP, NIGDY przez proxy IPRoyal - sesja konta i ciastka cf_clearance/datadome są związane
 z Twoim IP i przeglądarką. To osobny proces niż Zwiadowca (ten skanuje przez proxy).
 
+Przeglądarka: Patchright (łatana wersja Playwrighta) + Google Chrome (channel="chrome"), widoczne okno, domyślna
+konfiguracja - bez własnego user-agenta, nagłówków, skryptów i flag. Stały, OSOBNY profil bota (SCRAPER_PROFILE_DIR,
+domyślnie ./profiles/scraper) - nie Twój główny profil Chrome/Edge. Jeden proces na profil (blokada sniper.lock).
+
 Jak to działa:
-  1. Wczytuje ciastka z sniper/logs/my_headers.txt (cURL skopiowany z DevTools, jak w `python -m sniper.account`)
-     do TRWAŁEGO profilu Chromium (logs/account_profile) - po pierwszym razie profil pamięta sesję sam.
+  1. Pierwsze logowanie: `python -m sniper.account_session --login` - logujesz się RĘCZNIE w oknie bota, Enter
+     w konsoli; profil pamięta sesję. (Awaryjnie: ciastka z sniper/logs/my_headers.txt - cURL z DevTools.)
   2. Trzyma otwartą przeglądarkę i co kilkanaście minut wchodzi na stronę. Własny JavaScript Vinted odświeża
      wtedy access_token (żyje ~1 h) refresh-tokenem (żyje ~7 dni) - dzięki temu sesja nie wygasa.
   3. Co pętlę sprawdza przez /api/v2/banners, czy wciąż jesteś zalogowany (czyta nazwę konta).
   4. `open_item(url)` otwiera ogłoszenie na Twoim zalogowanym koncie - fundament pod auto-zakup.
 """
 import asyncio
-import json
 import logging
+import os
 from pathlib import Path
 
 from .account import DEFAULT_HEADERS_FILE, detect_banners, read_headers
-from .config import AccountConfig, ScoutConfig
+from .config import AccountConfig, DelayConfig, KeepalivePacer, ScoutConfig
 
 log = logging.getLogger("sniper.account")
 
@@ -57,6 +61,101 @@ async (path) => {
 """
 
 
+class ProfileInUseError(RuntimeError):
+    """Profil bota jest już używany przez inny proces (drugi Zwiadowca / account_session / check_detection)."""
+
+
+class ProfileLock:
+    """Blokada „jeden proces na profil” - plik sniper.lock w folderze profilu, blokowany przez system.
+
+    System zwalnia blokadę sam, gdy proces się zakończy (także po zabiciu / awarii), więc nic nie trzeba sprzątać.
+    """
+    FILE = "sniper.lock"
+
+    def __init__(self, profile_dir):
+        self.path = Path(profile_dir) / self.FILE
+        self._file = None
+
+    def acquire(self):
+        self.path.parent.mkdir(parents=True, exist_ok=True)
+        f = open(self.path, "a+", encoding="utf-8")
+        try:
+            if os.name == "nt":
+                import msvcrt
+                f.seek(0)
+                msvcrt.locking(f.fileno(), msvcrt.LK_NBLCK, 1)
+            else:
+                import fcntl
+                fcntl.flock(f.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except OSError:
+            f.close()
+            raise ProfileInUseError(
+                f"Profil bota {self.path.parent.resolve()} jest JUŻ UŻYWANY przez inny program sniper "
+                "(Zwiadowca z auto-zakupem, sniper.account_session, sniper.buyer albo check_detection). "
+                "Zamknij tamten program (Ctrl+C) i jego okno przeglądarki, potem uruchom ponownie.") from None
+        self._file = f
+        return self
+
+    def release(self):
+        if self._file is None:
+            return
+        try:
+            if os.name == "nt":
+                import msvcrt
+                self._file.seek(0)
+                msvcrt.locking(self._file.fileno(), msvcrt.LK_UNLCK, 1)
+            else:
+                import fcntl
+                fcntl.flock(self._file.fileno(), fcntl.LOCK_UN)
+        except OSError:
+            pass
+        self._file.close()
+        self._file = None
+
+
+async def launch_profile(profile_dir, nav_timeout=None):
+    """Patchright + Chrome na stałym profilu bota. Zwraca (patchright, context, page, lock).
+
+    Domyślna konfiguracja Patchrighta (działa najlepiej bez dodatków): channel="chrome", headless=False,
+    no_viewport=True, bez proxy, bez user-agenta / nagłówków / skryptów / dodatkowych flag.
+    Zajęty profil -> ProfileInUseError z czytelnym komunikatem.
+    """
+    from patchright.async_api import async_playwright
+
+    profile_dir = Path(profile_dir)
+    profile_dir.mkdir(parents=True, exist_ok=True)
+    lock = ProfileLock(profile_dir).acquire()
+    pw = ctx = None
+    try:
+        pw = await async_playwright().start()
+        try:
+            ctx = await pw.chromium.launch_persistent_context(
+                user_data_dir=str(profile_dir), channel="chrome", headless=False, no_viewport=True)
+        except Exception as exc:
+            text = str(exc)
+            if "chrome" in text.lower() and ("not found" in text.lower() or "install" in text.lower()):
+                raise RuntimeError("Nie znalazłem Google Chrome. Zainstaluj go poleceniem: patchright install chrome "
+                                   f"(albo zwykły instalator Chrome). Szczegół: {text[:300]}") from None
+            raise ProfileInUseError(
+                f"Nie udało się otworzyć Chrome na profilu {profile_dir.resolve()}. Najczęściej profil jest otwarty "
+                "w innym oknie Chrome (np. pozostałym po poprzednim uruchomieniu) - zamknij je i spróbuj ponownie. "
+                f"Szczegół: {text[:300]}") from None
+        if nav_timeout:
+            ctx.set_default_navigation_timeout(nav_timeout * 1000)
+        page = ctx.pages[0] if ctx.pages else await ctx.new_page()
+        return pw, ctx, page, lock
+    except BaseException:
+        if ctx is not None:
+            try:
+                await ctx.close()
+            except Exception:
+                pass
+        if pw is not None:
+            await pw.stop()
+        lock.release()
+        raise
+
+
 class VintedAccount:
     """Trwała sesja przeglądarki zalogowanej na Twoje konto (bez proxy)."""
 
@@ -64,57 +163,28 @@ class VintedAccount:
         self.cfg = cfg
         log_dir = Path(log_dir)
         self.headers_file = Path(cfg.headers_file) if cfg.headers_file else log_dir / DEFAULT_HEADERS_FILE
-        self.profile_dir = Path(cfg.profile_dir) if cfg.profile_dir else log_dir / "account_profile"
+        self.profile_dir = Path(cfg.profile_dir or "./profiles/scraper")
+        self.log_dir = log_dir                      # zrzuty ekranu przy błędach (nie do profilu z ciastkami)
+        self.delays = getattr(cfg, "delays", None) or DelayConfig()
         self._pw = None
+        self._lock = None
         self.context = None
         self.page = None
         self.username = None
         self.logged_in = False
         self._logging_in = False
 
-    def clear_profile_locks(self):
-        """Usuwa pliki-blokady Chromium z profilu (zostają po niedokończonym zamknięciu)."""
-        removed = []
-        for name in ("SingletonLock", "SingletonCookie", "SingletonSocket", "lockfile"):
-            lock = self.profile_dir / name
-            try:
-                if lock.is_symlink() or lock.exists():
-                    lock.unlink()
-                    removed.append(name)
-            except OSError:
-                pass
-        if removed:
-            log.info("[KONTO] Usunąłem blokady profilu: %s", ", ".join(removed))
-
     async def start(self):
         await self._launch()
         return await self._after_launch()
 
-    async def _launch(self, headless=None):
-        from playwright.async_api import async_playwright
+    async def _launch(self):
+        # Trwały profil => sesja przeżywa restart programu. BEZ proxy - domowe IP.
+        self._pw, self.context, self.page, self._lock = await launch_profile(self.profile_dir, self.cfg.nav_timeout)
+        log.info("[KONTO] Chrome (Patchright) uruchomiony - profil: %s, bez proxy.", self.profile_dir.resolve())
 
-        self.profile_dir.mkdir(parents=True, exist_ok=True)
-        self.clear_profile_locks()
-        self._pw = await async_playwright().start()
-        # Trwały profil => sesja przeżywa restart programu. BEZ proxy (proxy=None) - domowe IP.
-        launch_kwargs = dict(headless=self.cfg.headless if headless is None else headless, proxy=None,
-                             viewport=self.cfg.viewport_size)
-        if self.cfg.chrome_path:
-            launch_kwargs["executable_path"] = self.cfg.chrome_path
-        try:
-            self.context = await self._pw.chromium.launch_persistent_context(str(self.profile_dir), **launch_kwargs)
-        except Exception as exc:
-            raise RuntimeError(
-                "Nie udało się otworzyć przeglądarki na profilu konta. Najczęściej profil jest JUŻ UŻYWANY "
-                "przez inne okno/proces. Zamknij wszystkie okna tej przeglądarki i procesy 'python -m sniper...' "
-                "(w Menedżerze zadań), potem spróbuj ponownie. Jeśli nie pomoże: 'python -m sniper.account_session "
-                f"--reset' (wyczyści profil - trzeba będzie wkleić świeży cURL). Szczegół: {exc}"
-            ) from exc
-        self.context.set_default_navigation_timeout(self.cfg.nav_timeout * 1000)
-        self.page = self.context.pages[0] if self.context.pages else await self.context.new_page()
-        vp = self.cfg.viewport_size
-        log.info("[KONTO] Przeglądarka uruchomiona (profil: %s, okno %dx%d px, bez proxy).",
-                 self.profile_dir, vp["width"], vp["height"])
+    async def _pause(self, bounds):
+        await asyncio.sleep(DelayConfig.pick(bounds))
 
     async def _after_launch(self):
         seeded, _ = await self._seed_cookies()
@@ -148,13 +218,14 @@ class VintedAccount:
             async def wait_for_user():
                 return await asyncio.get_running_loop().run_in_executor(None, input)
         self._logging_in = True                     # w trakcie logowania NIE wgrywaj my_headers.txt
-        await self._launch(headless=False)
-        await self.page.goto(HOME_URL, wait_until="domcontentloaded")
+        await self._launch()
+        await self.page.goto(self.cfg.login_url or HOME_URL, wait_until="domcontentloaded")
         await self._dismiss_consent()
         print("\n=== LOGOWANIE BOTA ===\n"
               "1. W otwartym oknie kliknij „Zaloguj się” i wybierz logowanie E-MAILEM i HASŁEM Vinted.\n"
               "   NIE „Kontynuuj z Google/Facebook/Apple” - Google blokuje logowanie w przeglądarce sterowanej\n"
               "   przez program. Nie masz hasła do Vinted? „Nie pamiętasz hasła?” -> ustaw je linkiem z maila.\n"
+              "   Login i hasło wpisujesz SAM - program niczego nie wpisuje.\n"
               "2. Gdy zobaczysz swoje konto (awatar w prawym górnym rogu), wróć tutaj i naciśnij ENTER.\n"
               "   (q + Enter = przerwij)")
         for attempt in range(1, attempts + 1):
@@ -311,7 +382,7 @@ class VintedAccount:
                 if await button.count() and await button.first.is_visible():
                     await button.first.click(timeout=3000)
                     log.info("[KONTO] Zamknąłem baner ciastek (%s).", selector)
-                    await asyncio.sleep(0.5)
+                    await self._pause(self.delays.click_s)
                     return
             except Exception:
                 pass
@@ -361,7 +432,7 @@ class VintedAccount:
                 if reacted():
                     break
                 log.warning("[KONTO] Klik bez reakcji (strona mogła się jeszcze ładować) - ponawiam.")
-                await asyncio.sleep(1.5)
+                await self._pause(self.delays.retry_s)
 
             new_pages = [p for p in self.context.pages if p not in pages_before]
             target = new_pages[0] if new_pages else self.page
@@ -426,7 +497,7 @@ class VintedAccount:
                             await page.wait_for_load_state("networkidle", timeout=5000)
                         except Exception:
                             pass
-                        await asyncio.sleep(1.0)
+                        await self._pause(self.delays.click_s)
                         return button
                 except Exception:
                     pass
@@ -505,14 +576,14 @@ class VintedAccount:
                                        "prawdopodobnie trzeba najpierw zaznaczyć punkt na liście "
                                        f"(wklej outerHTML punktu z F12){shot}")
                 log.warning("[AUTO-ZAKUP] Okno wyboru punktu się nie otworzyło (strona mogła się ładować) - ponawiam.")
-                await asyncio.sleep(1.5)
+                await self._pause(self.delays.retry_s)
                 continue
 
             try:
                 await page.wait_for_load_state("networkidle", timeout=5000)
             except Exception:
                 pass
-            await asyncio.sleep(0.5)
+            await self._pause(self.delays.click_s)
             log.info("[AUTO-ZAKUP] Klikam 'Potwierdź' (punkt odbioru)...")
             await confirm.first.click(timeout=10000)
 
@@ -525,7 +596,7 @@ class VintedAccount:
                         await page.wait_for_load_state("networkidle", timeout=10000)
                     except Exception:
                         pass
-                    await asyncio.sleep(1.0)
+                    await self._pause(self.delays.click_s)
                     return True
                 await asyncio.sleep(0.5)
             log.warning("[AUTO-ZAKUP] Po 'Potwierdź' punkt nadal niewybrany - ponawiam.")
@@ -533,7 +604,7 @@ class VintedAccount:
         raise RuntimeError(f"nie udało się wybrać punktu odbioru po 3 próbach{shot}")
 
     async def _screenshot(self, page, name):
-        shot = Path(self.profile_dir).parent / name
+        shot = self.log_dir / name
         try:
             await page.screenshot(path=str(shot), full_page=True)
             return f" (zrzut ekranu: {shot})"
@@ -640,7 +711,7 @@ class VintedAccount:
                     other_posts.clear()
                 if attempt < 3:
                     log.warning("[AUTO-ZAKUP] Klik 'Zapłać' bez reakcji (strona mogła się jeszcze ładować) - ponawiam.")
-                    await asyncio.sleep(1.5)
+                    await self._pause(self.delays.retry_s)
         finally:
             self.context.remove_listener("request", on_request)
 
@@ -650,7 +721,7 @@ class VintedAccount:
     async def _dump_failure(self, page):
         """Diagnostyka, gdy 'Kup teraz' nie przeszło do checkoutu."""
         note = await self._page_notice()
-        shot = Path(self.profile_dir).parent / "buy_debug.png"
+        shot = self.log_dir / "buy_debug.png"
         try:
             await page.screenshot(path=str(shot), full_page=True)
         except Exception:
@@ -695,27 +766,37 @@ class VintedAccount:
         raise RuntimeError("nie znalazłem przycisku 'Kup teraz' na stronie oferty")
 
     async def run_forever(self):
-        interval = max(self.cfg.keepalive_min, 1.0) * 60
-        log.info("[KONTO] Podtrzymuję sesję co %.0f min. Ctrl+C kończy.", self.cfg.keepalive_min)
+        pacer = KeepalivePacer(self.delays)
+        low, high = self.delays.keepalive_min
+        log.info("[KONTO] Podtrzymuję sesję co %.0f-%.0f min (losowo, czasem dłuższa pauza). Ctrl+C kończy.",
+                 low, high)
         while True:
-            await asyncio.sleep(interval)
+            await asyncio.sleep(pacer.next_seconds())
             try:
                 await self.refresh_and_check()
             except Exception:
                 log.exception("[KONTO] Błąd podczas podtrzymania sesji - próbuję dalej.")
 
     def reset_profile(self):
+        """Czyści profil bota. Najpierw sprawdza blokadę - nie skasuje profilu, na którym działa inny proces."""
         import shutil
         if self.profile_dir.exists():
+            ProfileLock(self.profile_dir).acquire().release()
             shutil.rmtree(self.profile_dir, ignore_errors=True)
             log.info("[KONTO] Wyczyściłem profil %s - startuję od zera z ciastek z %s.",
                      self.profile_dir, self.headers_file.name)
 
     async def close(self):
-        if self.context:
-            await self.context.close()
-        if self._pw:
-            await self._pw.stop()
+        try:
+            if self.context:
+                await self.context.close()
+            if self._pw:
+                await self._pw.stop()
+        finally:
+            self.context = self._pw = None
+            if self._lock:
+                self._lock.release()
+                self._lock = None
 
 
 async def main(argv=None):
@@ -728,6 +809,14 @@ async def main(argv=None):
     args = parser.parse_args(argv)
 
     logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(name)s: %(message)s")
+    try:
+        return await _run(args)
+    except ProfileInUseError as exc:
+        print(f"\nBŁĄD: {exc}")
+        return 2
+
+
+async def _run(args):
     cfg = ScoutConfig()
     if args.login:
         account = VintedAccount(cfg.account, cfg.log_dir)
