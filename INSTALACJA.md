@@ -16,7 +16,7 @@ Skopiuj cały folder (np. `C:\Users\Szymek\sniper`) na laptopa **razem z plikami
 | `sniper\.env` | Twoje ustawienia: proxy, hasło SMTP, klucz AI | **tak** – bez niego program nie ruszy |
 | `sniper\guidelines.md` | wytyczne dla AI (jeśli zmieniałeś) | tak |
 | `sniper\logs\` | logi, `evaluations.*`, `oceny.html`, `bought.jsonl`, `session.json` | zalecane (historia, rejestr zakupów) |
-| `sniper\logs\account_profile\` | profil przeglądarki konta | opcjonalnie |
+| `profiles\scraper\` | profil przeglądarki bota (zalogowana sesja konta) | opcjonalnie – zamiast tego `--login` (krok 3) |
 
 Przenoś je pendrive'em / dyskiem, **nie przez GitHub ani maila** – `.env` zawiera hasła i klucze.
 
@@ -30,7 +30,17 @@ python -m venv .venv
 .venv\Scripts\activate
 pip install -r sniper\requirements.txt
 python -m playwright install chromium
+patchright install chrome
 ```
+`patchright install chrome` instaluje Google Chrome (przeglądarka konta / auto-zakup). Jeśli Chrome już jest
+zainstalowany, użyje istniejącego.
+
+Pierwsze logowanie bota (tylko przy auto-zakupie, raz na komputer / nowy profil):
+```
+python -m sniper.account_session --login
+```
+Otworzy się okno Chrome z osobnym profilem bota (`profiles\scraper`) – zaloguj się RĘCZNIE e-mailem i hasłem
+Vinted, potem naciśnij Enter w konsoli. Program nie wpisuje loginu ani hasła.
 Lista bibliotek: `sniper\requirements.txt`. Do testów dodatkowo: `pip install -r sniper\requirements-dev.txt`.
 
 Za każdym razem przed uruchomieniem w nowym oknie konsoli: `.venv\Scripts\activate`.
@@ -40,6 +50,7 @@ Za każdym razem przed uruchomieniem w nowym oknie konsoli: `.venv\Scripts\activ
 python -m pytest sniper\tests          # tylko jeśli zainstalowałeś requirements-dev.txt
 python -m sniper.notifier              # mail testowy
 python -m sniper                       # Zwiadowca
+python -m sniper.check_detection       # okno z testami wykrywania bota (do ręcznej oceny, Enter zamyka)
 ```
 
 ## Uwagi

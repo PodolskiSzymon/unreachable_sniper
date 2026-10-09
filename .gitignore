@@ -10,4 +10,6 @@ sniper/logs/
 sniper/logs/my_headers.txt
 sniper/logs/account_check.html
 sniper/logs/account_profile/
+# Profil przeglądarki bota (Patchright, SCRAPER_PROFILE_DIR) - ciasteczka sesji konta
+profiles/
 my_headers.txt

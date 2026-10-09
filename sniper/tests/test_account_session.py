@@ -1,4 +1,6 @@
 """Testy sesji konta (sniper/account_session.py) - części bez przeglądarki (konwersja ciastek, konfiguracja)."""
+from pathlib import Path
+
 import pytest
 
 from sniper import account_session as acc
@@ -32,11 +34,18 @@ def test_load_account_cookies_requires_cookie(tmp_path):
         acc.load_account_cookies(f)
 
 
-def test_account_paths_default_to_log_dir(tmp_path):
+def _cfg(tmp_path, **kw):
+    """Konfiguracja z profilem w tmp_path (domyślny ./profiles/scraper zaśmiecałby katalog roboczy)."""
+    kw.setdefault("profile_dir", str(tmp_path / "profiles" / "scraper"))
+    return AccountConfig(**kw)
+
+
+def test_account_paths_default(tmp_path, monkeypatch):
+    monkeypatch.delenv("SCRAPER_PROFILE_DIR", raising=False)
     cfg = AccountConfig()
     account = acc.VintedAccount(cfg, tmp_path)
     assert account.headers_file == tmp_path / "my_headers.txt"
-    assert account.profile_dir == tmp_path / "account_profile"
+    assert account.profile_dir == Path("profiles") / "scraper"          # ./profiles/scraper - osobny profil bota
 
 
 def test_account_paths_from_config(tmp_path):
@@ -67,7 +76,7 @@ class FakePage:
 
 
 def _account_with_page(tmp_path, banners_result):
-    account = acc.VintedAccount(AccountConfig(), tmp_path)
+    account = acc.VintedAccount(_cfg(tmp_path), tmp_path)
     account.page = FakePage(banners_result)
     return account
 
@@ -106,7 +115,7 @@ def test_is_session_refresh_detects_loop():
 
 
 def test_reset_profile_removes_dir(tmp_path):
-    account = acc.VintedAccount(AccountConfig(), tmp_path)
+    account = acc.VintedAccount(_cfg(tmp_path), tmp_path)
     account.profile_dir.mkdir(parents=True)
     (account.profile_dir / "Cookies").write_text("stare", encoding="utf-8")
     account.reset_profile()
@@ -115,21 +124,121 @@ def test_reset_profile_removes_dir(tmp_path):
 
 def test_stuck_on_session_refresh_when_not_refresh(tmp_path):
     import asyncio
-    account = acc.VintedAccount(AccountConfig(), tmp_path)
+    account = acc.VintedAccount(_cfg(tmp_path), tmp_path)
     account.page = FakePage({"status": 200, "body": "{}"})
     account.page.goto_urls.append("https://www.vinted.pl/")      # nie jest to session-refresh
     assert asyncio.run(account._stuck_on_session_refresh()) is False
 
 
-def test_clear_profile_locks_removes_only_locks(tmp_path):
-    account = acc.VintedAccount(AccountConfig(), tmp_path)
+def test_profile_lock_blocks_second_instance(tmp_path):
+    """Drugi proces na tym samym profilu -> czytelny ProfileInUseError (nie stack trace Chrome)."""
+    import subprocess
+    import sys
+    profile = tmp_path / "profiles" / "scraper"
+    lock = acc.ProfileLock(profile).acquire()
+    try:
+        code = ("import sys; from sniper.account_session import ProfileLock, ProfileInUseError\n"
+                "try:\n    ProfileLock(sys.argv[1]).acquire()\nexcept ProfileInUseError as e:\n"
+                "    print(e); sys.exit(3)\n")
+        other = subprocess.run([sys.executable, "-c", code, str(profile)], capture_output=True, text=True,
+                               cwd=Path(__file__).parents[2])
+        assert other.returncode == 3 and "JUŻ UŻYWANY" in other.stdout
+    finally:
+        lock.release()
+    acc.ProfileLock(profile).acquire().release()            # po zwolnieniu - znów wolny
+
+
+def test_reset_profile_refuses_locked_profile(tmp_path):
+    import subprocess
+    import sys
+    account = acc.VintedAccount(_cfg(tmp_path), tmp_path)
     account.profile_dir.mkdir(parents=True)
-    for name in ("SingletonLock", "lockfile", "Cookies"):
-        (account.profile_dir / name).write_text("x", encoding="utf-8")
-    account.clear_profile_locks()
-    assert not (account.profile_dir / "SingletonLock").exists()
-    assert not (account.profile_dir / "lockfile").exists()
-    assert (account.profile_dir / "Cookies").exists()      # ciastka (logowanie) zostają
+    (account.profile_dir / "Cookies").write_text("sesja", encoding="utf-8")
+    holder = subprocess.Popen(
+        [sys.executable, "-c", "import sys,time; from sniper.account_session import ProfileLock; "
+         "lock = ProfileLock(sys.argv[1]).acquire(); print('ok', flush=True); time.sleep(30)", str(account.profile_dir)],
+        stdout=subprocess.PIPE, text=True, cwd=Path(__file__).parents[2])
+    try:
+        assert holder.stdout.readline().strip() == "ok"
+        with pytest.raises(acc.ProfileInUseError):
+            account.reset_profile()
+        assert (account.profile_dir / "Cookies").exists()     # profil innego procesu NIE skasowany
+    finally:
+        holder.kill()
+        holder.wait()
+
+
+def test_launch_profile_uses_patchright_defaults(tmp_path, monkeypatch):
+    """channel=chrome, headless=False, no_viewport=True i NIC więcej (bez UA, nagłówków, flag, proxy)."""
+    import asyncio
+    calls = {}
+
+    class Ctx:
+        pages = []
+
+        def set_default_navigation_timeout(self, ms):
+            calls["timeout"] = ms
+
+        async def new_page(self):
+            return "nowa-strona"
+
+    class Chromium:
+        async def launch_persistent_context(self, **kw):
+            calls["kw"] = kw
+            return Ctx()
+
+    class PW:
+        chromium = Chromium()
+
+        async def start(self):
+            return self
+
+        async def stop(self):
+            calls["stopped"] = True
+
+    import patchright.async_api as pra
+    monkeypatch.setattr(pra, "async_playwright", lambda: PW())
+    profile = tmp_path / "profiles" / "scraper"
+    pw, ctx, page, lock = asyncio.run(acc.launch_profile(profile, 45))
+    try:
+        assert calls["kw"] == {"user_data_dir": str(profile), "channel": "chrome", "headless": False,
+                               "no_viewport": True}
+        assert page == "nowa-strona" and profile.is_dir() and calls["timeout"] == 45000
+    finally:
+        lock.release()
+
+
+def test_launch_profile_releases_lock_on_failure(tmp_path, monkeypatch):
+    import asyncio
+
+    class Chromium:
+        async def launch_persistent_context(self, **kw):
+            raise Exception("Target page, context or browser has been closed")
+
+    class PW:
+        chromium = Chromium()
+
+        async def start(self):
+            return self
+
+        async def stop(self):
+            pass
+
+    import patchright.async_api as pra
+    monkeypatch.setattr(pra, "async_playwright", lambda: PW())
+    profile = tmp_path / "p"
+    with pytest.raises(acc.ProfileInUseError, match="Nie udało się otworzyć Chrome"):
+        asyncio.run(acc.launch_profile(profile))
+    acc.ProfileLock(profile).acquire().release()            # blokada zwolniona mimo błędu
+
+
+def test_no_antidetect_tweaks_in_account_code():
+    """Patchright działa najlepiej na domyślnej konfiguracji - żadnych łatek w kodzie konta."""
+    for name in ("account_session.py", "check_detection.py"):
+        src = (Path(acc.__file__).with_name(name)).read_text(encoding="utf-8")
+        for banned in ("add_init_script", "user_agent=", "extra_http_headers", "AutomationControlled",
+                       "playwright.async_api", "args=["):
+            assert banned not in src.replace("patchright.async_api", ""), (name, banned)
 
 
 def test_is_checkout_url():
@@ -151,7 +260,7 @@ def test_seed_only_new_or_changed_headers(tmp_path):
         async def add_cookies(self, cookies):
             self.added.append(cookies)
 
-    account = acc.VintedAccount(AccountConfig(), tmp_path)
+    account = acc.VintedAccount(_cfg(tmp_path), tmp_path)
     account.profile_dir.mkdir(parents=True)
     account.context = FakeContext()
     account.headers_file.write_text("curl 'https://www.vinted.pl/' -b 'access_token_web=STARY; a=1'",
@@ -173,7 +282,7 @@ def test_seed_only_new_or_changed_headers(tmp_path):
 def test_start_reseeds_when_profile_not_logged_in(tmp_path, monkeypatch):
     """Profil bez ważnej sesji + pominięte ciastka -> start wgrywa je jeszcze raz i sprawdza ponownie."""
     import asyncio
-    account = acc.VintedAccount(AccountConfig(), tmp_path)
+    account = acc.VintedAccount(_cfg(tmp_path), tmp_path)
     account.profile_dir.mkdir(parents=True)
     account.headers_file.write_text("curl 'https://www.vinted.pl/' -b 'a=1'", encoding="utf-8")
     (account.profile_dir / account.SEED_MARKER).write_text(account._headers_stamp(), encoding="utf-8")
@@ -189,7 +298,7 @@ def test_start_reseeds_when_profile_not_logged_in(tmp_path, monkeypatch):
             seeds.append(cookies)
 
     class FakeChromium:
-        async def launch_persistent_context(self, path, **kw):
+        async def launch_persistent_context(self, **kw):
             return FakeCtx()
 
     class FakePW:
@@ -198,14 +307,15 @@ def test_start_reseeds_when_profile_not_logged_in(tmp_path, monkeypatch):
         async def start(self):
             return self
 
-    import playwright.async_api as pwa
-    monkeypatch.setattr(pwa, "async_playwright", lambda: FakePW())
+    import patchright.async_api as pra
+    monkeypatch.setattr(pra, "async_playwright", lambda: FakePW())
 
     async def fake_check():
         return next(checks)
     monkeypatch.setattr(account, "refresh_and_check", fake_check)
     asyncio.run(account.start())
     assert len(seeds) == 1 and account.logged_in is True     # pominięte przy starcie, wgrane po porażce
+    account._lock.release()
 
 
 class _Loc:
@@ -245,14 +355,14 @@ class _Ctx:
 
 def test_banners_ok_but_login_button_means_logged_out(tmp_path):
     import asyncio
-    account = acc.VintedAccount(AccountConfig(), tmp_path)
+    account = acc.VintedAccount(_cfg(tmp_path), tmp_path)
     account.page = GuestPage(login_visible=True)
     assert asyncio.run(account.refresh_and_check()) is False        # fałszywe „Sesja aktywna” z logu użytkownika
 
 
 def test_banners_ok_without_account_token_means_logged_out(tmp_path):
     import asyncio
-    account = acc.VintedAccount(AccountConfig(), tmp_path)
+    account = acc.VintedAccount(_cfg(tmp_path), tmp_path)
     account.page = GuestPage(login_visible=None)
     account.context = _Ctx([{"name": "anon_id", "value": "x"}])
     account.headers_file = tmp_path / "brak.txt"                      # needs_seed() = False
@@ -261,7 +371,7 @@ def test_banners_ok_without_account_token_means_logged_out(tmp_path):
 
 def test_banners_ok_with_token_and_no_login_button_is_logged_in(tmp_path):
     import asyncio
-    account = acc.VintedAccount(AccountConfig(), tmp_path)
+    account = acc.VintedAccount(_cfg(tmp_path), tmp_path)
     account.page = GuestPage(login_visible=False)
     account.context = _Ctx([{"name": "access_token_web", "value": "tok"}])
     account.headers_file = tmp_path / "brak.txt"
@@ -272,7 +382,7 @@ def test_own_login_never_uses_my_headers(tmp_path):
     """Po --login bot ma własną sesję: my_headers.txt (kopia z Edge) nie może jej nadpisać - ani przy starcie,
     ani przy awaryjnym ponownym wgraniu."""
     import asyncio
-    account = acc.VintedAccount(AccountConfig(), tmp_path)
+    account = acc.VintedAccount(_cfg(tmp_path), tmp_path)
     account.profile_dir.mkdir(parents=True)
     account.headers_file.write_text("curl 'https://www.vinted.pl/' -b 'access_token_web=KOPIA'", encoding="utf-8")
     assert account.needs_seed() is True
@@ -289,8 +399,30 @@ def test_own_login_never_uses_my_headers(tmp_path):
 
 
 def test_no_seeding_while_logging_in(tmp_path):
-    account = acc.VintedAccount(AccountConfig(), tmp_path)
+    account = acc.VintedAccount(_cfg(tmp_path), tmp_path)
     account.profile_dir.mkdir(parents=True)
     account.headers_file.write_text("curl 'https://www.vinted.pl/' -b 'a=1'", encoding="utf-8")
     account._logging_in = True
     assert account.needs_seed() is False
+
+
+def test_delay_ranges_from_env(monkeypatch):
+    from sniper.config import _env_range
+    monkeypatch.setenv("X_RANGE", "12-4")
+    assert _env_range("X_RANGE", (1, 2)) == (4.0, 12.0)                # odwrócony zakres poprawiony
+    monkeypatch.setenv("X_RANGE", "0,8-2,5")
+    assert _env_range("X_RANGE", (1, 2)) == (0.8, 2.5)                 # polski przecinek
+    monkeypatch.setenv("X_RANGE", "bzdura")
+    assert _env_range("X_RANGE", (1, 2)) == (1, 2)
+
+
+def test_keepalive_pacer_random_with_long_pause():
+    from sniper.config import DelayConfig, KeepalivePacer
+    d = DelayConfig(keepalive_min=(15.0, 25.0), long_pause_every=(12.0, 18.0), long_pause_min=(40.0, 60.0))
+    pacer = KeepalivePacer(d)
+    minutes = [pacer.next_seconds() / 60 for _ in range(200)]
+    normal = [m for m in minutes if m <= 25]
+    long_ = [m for m in minutes if m >= 40]
+    assert len(normal) + len(long_) == 200 and all(15 <= m <= 25 for m in normal)
+    assert 200 // 18 <= len(long_) <= 200 // 12 + 1                    # dłuższa pauza co kilkanaście wejść
+    assert len({round(m, 3) for m in normal}) > 50                      # naprawdę losowe, nie stałe

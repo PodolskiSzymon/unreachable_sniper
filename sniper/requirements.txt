@@ -1,9 +1,11 @@
 # Biblioteki potrzebne do uruchomienia sniper (Python 3.12).
 # Instalacja:   pip install -r sniper/requirements.txt
-# Potem raz:    python -m playwright install chromium
+# Potem raz:    python -m playwright install chromium   (Zwiadowca - skan przez proxy)
+#               patchright install chrome              (przeglądarka konta / auto-zakup - Google Chrome)
 httpx>=0.26            # zapytania do Vinted przez proxy
 aiosmtplib>=3.0        # wysyłka maili (SMTP Onet)
-playwright>=1.40       # przeglądarka (sesja Zwiadowcy, konto)
+playwright>=1.40       # przeglądarka Zwiadowcy (sesja przez proxy, bez logowania)
+patchright>=1.55       # przeglądarka konta (zalogowana sesja, auto-zakup) - łatany Playwright
 python-dotenv>=1.0     # wczytywanie sniper/.env
 anthropic>=1.0         # ocena AI - Claude (SNIPER_AI_PROVIDER=anthropic)
 google-genai>=2.0      # ocena AI - Gemini (SNIPER_AI_PROVIDER=gemini)

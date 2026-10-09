@@ -8,12 +8,13 @@ Przepływ (python -m sniper z SNIPER_BUY_ENABLED=true):
 
 Przeglądarka konta (account_session.VintedAccount, domowe IP, bez proxy) startuje razem ze Zwiadowcą
 i jest podtrzymywana w tle - wtedy NIE uruchamiaj osobno `python -m sniper.account_session`
-(ten sam profil Chromium może mieć otwarty tylko jeden proces).
+(ten sam profil bota może mieć otwarty tylko jeden proces - pilnuje tego blokada sniper.lock).
 """
 import asyncio
 import logging
 
 from .buyer import PurchaseLedger, attempt_purchase, summarize
+from .config import DelayConfig, KeepalivePacer
 
 log = logging.getLogger("sniper.autobuy")
 
@@ -31,7 +32,7 @@ class AutoBuyer:
             account = VintedAccount(cfg.account, cfg.log_dir)
         self.account = account
         self.ledger = ledger if ledger is not None else PurchaseLedger(cfg.log_dir)
-        self.keepalive_min = cfg.account.keepalive_min
+        self.delays = getattr(cfg.account, "delays", None) or DelayConfig()
         self.ready = False
         self._queue = asyncio.Queue()
         self._queued = set()
@@ -44,7 +45,7 @@ class AutoBuyer:
         """Uruchamia przeglądarkę konta. False = przeglądarka w ogóle nie wstała (auto-zakup wyłączony).
 
         Brak zalogowania NIE zamyka okna: auto-zakup jest wstrzymany (okazje idą zwykłym mailem), a podtrzymanie
-        sesji sprawdza dalej co keepalive_min - po wklejeniu świeżego cURL do my_headers.txt wznawia się samo.
+        sesji sprawdza dalej (co ~2 min) - po wklejeniu świeżego cURL do my_headers.txt wznawia się samo.
         """
         try:
             await self.account.start()
@@ -204,8 +205,9 @@ class AutoBuyer:
             self.notifier.notify_text(subject, body)
 
     async def _keepalive(self):
-        interval = max(self.keepalive_min, 1.0) * 60
+        pacer = KeepalivePacer(self.delays)
         while True:
-            # Przy wstrzymanym auto-zakupie sprawdzaj częściej (co 2 min), żeby świeży cURL szybko go wznowił.
-            await asyncio.sleep(interval if self.ready else min(interval, 120))
+            # Przy wstrzymanym auto-zakupie sprawdzaj częściej (co ~2 min), żeby świeży cURL szybko go wznowił.
+            delay = pacer.next_seconds() if self.ready else DelayConfig.pick(self.delays.session_lost_check_s)
+            await asyncio.sleep(delay)
             await self.check_session()

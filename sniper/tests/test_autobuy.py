@@ -6,7 +6,7 @@ from types import SimpleNamespace
 from sniper import autobuy
 from sniper.autobuy import AutoBuyer
 from sniper.buyer import PurchaseLedger
-from sniper.config import BuyerConfig
+from sniper.config import BuyerConfig, DelayConfig
 from sniper.evaluator import OfferEvaluator
 from sniper.notifier import build_message, sample_offer
 from sniper.tests.test_buyer import CHECKOUT
@@ -69,7 +69,7 @@ class FakeNotifier:
 def make_buyer(tmp_path, account=None, **buy_kw):
     buy = dict(enabled=True, max_total_pln=2500.0, max_per_day=2, pl_only=True, min_score=8.0)
     buy.update(buy_kw)
-    cfg = SimpleNamespace(buyer=BuyerConfig(**buy), account=SimpleNamespace(keepalive_min=20.0), log_dir=tmp_path)
+    cfg = SimpleNamespace(buyer=BuyerConfig(**buy), account=SimpleNamespace(delays=DelayConfig()), log_dir=tmp_path)
     notifier = FakeNotifier()
     return AutoBuyer(cfg, notifier, account=account or FakeAccount(), ledger=PurchaseLedger(tmp_path)), notifier
 

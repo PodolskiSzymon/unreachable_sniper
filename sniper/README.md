@@ -59,9 +59,12 @@ Zdjęcia **nie są pobierane** – w ofercie jest tylko lista `full_size_url`.
 
 ```bash
 pip install -r sniper/requirements.txt
-playwright install chromium
+playwright install chromium              # Zwiadowca (skan przez proxy)
+patchright install chrome                # Google Chrome dla przeglądarki konta (auto-zakup)
 cp sniper/.env.example sniper/.env      # uzupełnij proxy i hasło do Onetu
+python -m sniper.account_session --login   # RAZ: ręczne logowanie bota (tylko przy auto-zakupie)
 python -m sniper                         # z katalogu głównego repo
+python -m sniper.check_detection         # ręczna kontrola wykrywalności przeglądarki konta
 ```
 
 Testy (na prawdziwych odpowiedziach API z `api.docx`):
@@ -111,14 +114,18 @@ za ocenę. Claude Opus 5.5 przy tym samym wejściu ≈ 0,05–0,10 USD. Taniej: 
 i `SNIPER_AI_FALLBACK=false`).
 
 **Krok 2 - sesja konta 24/7** (`python -m sniper.account_session`): osobny program, który trzyma Twoje konto
-zalogowane w trwałym profilu Chromium (z domowego IP, BEZ proxy). Co `SNIPER_ACCOUNT_KEEPALIVE_MIN` minut wchodzi
-na stronę - JS Vinted odświeża wtedy token dostępu (żyje ~1 h) refresh-tokenem (żyje ~7 dni), więc sesja nie
+zalogowane w stałym profilu bota (Patchright + Google Chrome, `channel="chrome"`, widoczne okno, `no_viewport`,
+domyślna konfiguracja bez własnego user-agenta, nagłówków, skryptów i flag; profil `SCRAPER_PROFILE_DIR`, domyślnie
+`./profiles/scraper`; z domowego IP, BEZ proxy). Co 15-25 min (losowo, `SCRAPER_KEEPALIVE_MIN`; co kilkanaście wejść
+dłuższa pauza) wchodzi na stronę - JS Vinted odświeża wtedy token dostępu (żyje ~1 h) refresh-tokenem (żyje ~7 dni), więc sesja nie
 wygasa. Sprawdza przez `api/v2/banners`, czy wciąż jesteś zalogowany. `open_item(url)` otwiera ofertę na koncie -
 fundament pod auto-zakup, ale NA RAZIE NIC NIE KUPUJE.
 
 Włącz `SNIPER_ACCOUNT_ENABLED=true`, miej `sniper/logs/my_headers.txt` (świeży cURL z F12). Po ~7 dniach,
-gdy refresh-token wygaśnie, wklej nowy cURL i uruchom ponownie. Pliki `my_headers.txt` i `account_profile/`
-są w `.gitignore`.
+gdy refresh-token wygaśnie, wklej nowy cURL i uruchom ponownie. Pliki `my_headers.txt` i `profiles/`
+są w `.gitignore`. Jeden proces na profil (blokada `sniper.lock` w profilu): drugi start - np. `account_session`
+obok Zwiadowcy z auto-zakupem - kończy się komunikatem „profil jest JUŻ UŻYWANY”, a `--reset`/`--login` nie
+skasuje profilu, na którym działa inny proces.
 
 **Pętla `session-refresh` / „ciągle się odświeża”** = sesja w profilu jest nieważna (np. po ponownym
 zalogowaniu w innej przeglądarce stare tokeny przestały działać). Napraw: zatrzymaj program, wklej ŚWIEŻY
@@ -127,7 +134,8 @@ cURL do `my_headers.txt` i uruchom z czyszczeniem profilu:
 w kółko.
 
 Uwaga: Vinted ma ochronę anty-bot (datadome). Zbyt częste automatyczne wejścia mogą ją wywołać - dlatego
-podtrzymanie jest rzadkie (`SNIPER_ACCOUNT_KEEPALIVE_MIN`, domyślnie 20 min). Captcha i klik „Zapłać”
+podtrzymanie jest rzadkie i losowe (`SCRAPER_KEEPALIVE_MIN`, domyślnie 15-25 min). Wszystkie przerwy
+przeglądarki konta są w `sniper/.env` jako zakresy `SCRAPER_*` (klasa `DelayConfig` w `config.py`). Captcha i klik „Zapłać”
 zawsze zostają po Twojej stronie.
 
 **Krok 3 - auto-zakup (`sniper/buyer.py`)**: przy ofercie z oceną >= `SNIPER_BUY_MIN_SCORE` bot przez sesję
@@ -145,8 +153,8 @@ python -m sniper.buyer "https://www.vinted.pl/items/XXXX-..." --max 30   # test 
 python -m sniper.buyer "https://www.vinted.pl/items/XXXX-..." --forget   # usuń fałszywy wpis z bought.jsonl i spróbuj
 ```
 
-**Logowanie bota (zalecane)**: `python -m sniper.account_session --login` czyści profil bota i otwiera jego okno -
-zaloguj się w nim RĘCZNIE (login, hasło, ewentualny kod), potem naciśnij ENTER w konsoli. Bot dostaje własną sesję, którą sam odświeża; `my_headers.txt`
+**Logowanie bota (zalecane)**: `python -m sniper.account_session --login` czyści profil bota i otwiera jego okno na
+stronie `SCRAPER_LOGIN_URL` - zaloguj się w nim RĘCZNIE (program niczego nie wpisuje) (login, hasło, ewentualny kod), potem naciśnij ENTER w konsoli. Bot dostaje własną sesję, którą sam odświeża; `my_headers.txt`
 (kopia sesji z Twojej przeglądarki) przestaje być używany - taka kopia wygasała po 1-2 h. Nie używaj potem w Vinted
 „wyloguj ze wszystkich urządzeń”, bo zakończy to też sesję bota.
 
