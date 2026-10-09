@@ -174,6 +174,16 @@ def describe_jwt(token):
     return ", ".join(parts)
 
 
+def is_guest_token(token):
+    """Token GOŚCIA (Vinted daje access_token_web także niezalogowanym): JWT ze scope=public i bez sub.
+
+    Zweryfikowane w logu użytkownika 2026-10-09: niezalogowany profil miał token iss=vinted-iam-oauth, scope=public,
+    bez pola sub, ważny 24 h. Nie-JWT / brak danych -> False (nie wiemy, więc nie odrzucamy).
+    """
+    c = jwt_claims(token or "")
+    return bool(c) and c.get("scope") == "public" and not c.get("sub")
+
+
 def jwt_expiry(token):
     """Czas wygaśnięcia (epoch, s) z tokenu JWT (pole exp) albo None. Bez weryfikacji podpisu - tylko odczyt."""
     import base64
@@ -506,8 +516,13 @@ class VintedAccount:
             return False
         login_button = await self._login_button_visible()
         has_token = await self._has_account_token()
+        guest = bool(has_token) and is_guest_token(await self._account_token())
+        if guest:
+            has_token = False                           # token gościa to nie sesja konta
         if login_button or has_token is False:
-            self.last_reason = ("na stronie widać „Zaloguj się”" if login_button else "brak ciastka access_token_web")
+            self.last_reason = ("na stronie widać „Zaloguj się”" if login_button
+                                else "tylko token gościa (access_token_web scope=public, bez sub)" if guest
+                                else "brak ciastka access_token_web")
             log.warning("[KONTO] NIE jesteś zalogowany (%s). Zaloguj się w oknie bota (strona główna Vinted).",
                         "na stronie jest „Zaloguj się”" if login_button else "brak ciastka access_token_web")
             self.username = None
@@ -642,7 +657,7 @@ class VintedAccount:
                 return True
             if status == 200 and '"code":0' in body:
                 login_button = await self._login_button_visible()
-                if not login_button and token:
+                if not login_button and token and not is_guest_token(token):
                     log.info("[KONTO] Sesja aktywna (banner bez nazwy, bez „Zaloguj się”, z tokenem konta).")
                     await self._log_cookies("po wykryciu zalogowania")
                     return True

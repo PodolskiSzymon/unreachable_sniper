@@ -593,3 +593,20 @@ def test_keepalive_without_navigation_mode(tmp_path, monkeypatch):
         return True
     monkeypatch.setattr(account, "refresh_and_check", check)
     assert asyncio.run(account.verify_session()) is True and calls == [(False, False)]
+
+
+def test_guest_token_is_not_a_session(tmp_path):
+    """Log 2026-10-09: token gościa (scope=public, bez sub) dawał fałszywe „Sesja aktywna”."""
+    import asyncio
+    import base64
+    import json
+    enc = lambda d: base64.urlsafe_b64encode(json.dumps(d).encode()).decode().rstrip("=")
+    guest = f"{enc({'a': 1})}.{enc({'iss': 'vinted-iam-oauth', 'scope': 'public', 'iat': 0, 'exp': 86400})}.p"
+    user = f"{enc({'a': 1})}.{enc({'iss': 'vinted-iam-oauth', 'scope': 'user', 'sub': '42', 'iat': 0, 'exp': 3600})}.p"
+    assert acc.is_guest_token(guest) and not acc.is_guest_token(user) and not acc.is_guest_token("nie-jwt")
+    account = acc.VintedAccount(_cfg(tmp_path), tmp_path)
+    account.page = GuestPage(login_visible=False)
+    account.page.goto_urls.append("https://www.vinted.pl/")
+    account.context = _Ctx([{"name": "access_token_web", "value": guest}])
+    assert asyncio.run(account.refresh_and_check(navigate=False)) is False
+    assert asyncio.run(account.refresh_and_check()) is False and "access_token_web" in account.last_reason
