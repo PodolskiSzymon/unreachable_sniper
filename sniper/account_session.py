@@ -306,6 +306,8 @@ class VintedAccount:
         """Uruchamia przeglądarkę i sprawdza sesję. Niezalogowany -> okno ZOSTAJE na stronie głównej do logowania."""
         await self._launch()
         self.logged_in = await self.refresh_and_check()
+        if self.logged_in:
+            await self._log_cookies("po starcie")
         if not self.logged_in:
             await self.focus()
             log.warning("[KONTO] NIE jesteś zalogowany. ZALOGUJ SIĘ w otwartym oknie Chrome bota (strona główna "
@@ -451,6 +453,12 @@ class VintedAccount:
             return text
         names = sorted(n for n in by_name if n)
         return "; ".join([life("access_token_web"), life("refresh_token_web")]) + f" | ciastka: {', '.join(names)}"
+
+    async def _log_cookies(self, when):
+        try:
+            log.info("[KONTO] Ciastka sesji (%s): %s", when, await self.cookie_report())
+        except Exception:
+            pass
 
     async def _log_failure_details(self, traffic):
         report = await self.cookie_report()
@@ -612,7 +620,10 @@ class VintedAccount:
         self._last_token = token
         if token_changed and reload_on_token_change:
             log.info("[KONTO] Nowy token konta w przeglądarce (koniec logowania?) - sprawdzam z przeładowaniem strony.")
-            return await self.refresh_and_check(navigate=True)
+            ok = await self.refresh_and_check(navigate=True)
+            if ok:
+                await self._log_cookies("po wykryciu zalogowania")
+            return ok
 
         url = self.page.url or ""
         status, name, login_button = None, None, None
@@ -627,11 +638,13 @@ class VintedAccount:
             if name:
                 self.username = name
                 log.info("[KONTO] Zalogowany jako: %s", name)
+                await self._log_cookies("po wykryciu zalogowania")
                 return True
             if status == 200 and '"code":0' in body:
                 login_button = await self._login_button_visible()
                 if not login_button and token:
                     log.info("[KONTO] Sesja aktywna (banner bez nazwy, bez „Zaloguj się”, z tokenem konta).")
+                    await self._log_cookies("po wykryciu zalogowania")
                     return True
         self.username = None
         now = _t.monotonic()
