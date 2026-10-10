@@ -343,6 +343,18 @@ class KeepalivePacer:
 
 
 @dataclass(frozen=True)
+class NtfyConfig:
+    """Powiadomienia push na telefon (sniper/push.py, aplikacja ntfy). Puste SNIPER_NTFY_TOPIC = wyłączone."""
+    topic: str = _env("SNIPER_NTFY_TOPIC")                       # długa, losowa nazwa - temat jest „hasłem”
+    server: str = _env("SNIPER_NTFY_SERVER", "https://ntfy.sh")
+    token: str = _env("SNIPER_NTFY_TOKEN")                       # tylko dla własnego serwera / konta ntfy
+    # Od jakiej oceny AI powiadomienie (domyślnie jak mail: SNIPER_AI_MIN_SCORE).
+    min_score: float = _env_float("SNIPER_NTFY_MIN_SCORE", _env_float("SNIPER_AI_MIN_SCORE", 8.0))
+    priority: int = _env_int("SNIPER_NTFY_PRIORITY", 5)          # 5 = max: osobny kanał = własny dźwięk w Androidzie
+    attach_photo: bool = _env_bool("SNIPER_NTFY_PHOTO", True)    # pierwsze zdjęcie oferty w powiadomieniu
+
+
+@dataclass(frozen=True)
 class AccountConfig:
     """Sesja TWOJEGO konta Vinted (auto-zakup) - sniper.account_session, przeglądarka Patchright.
 
@@ -426,6 +438,7 @@ class ScoutConfig:
     smtp: SmtpConfig = field(default_factory=SmtpConfig)
     ai: AiConfig = field(default_factory=AiConfig)
     account: AccountConfig = field(default_factory=AccountConfig)
+    ntfy: NtfyConfig = field(default_factory=NtfyConfig)
     buyer: BuyerConfig = field(default_factory=BuyerConfig)
 
     @property

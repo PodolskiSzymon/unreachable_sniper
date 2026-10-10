@@ -515,6 +515,7 @@ class OfferEvaluator:
         self.buyer = None
         # Podgląd ocen w przeglądarce: logs/oceny.html (sniper/report.py).
         self.report = None
+        self.push = None                 # PushNotifier (sniper/push.py) - ustawiany w __main__
         if self.log_dir:
             try:
                 from .report import ReportWriter
@@ -577,6 +578,15 @@ class OfferEvaluator:
         return record["status"] == STATUS_EVALUATED and record["evaluation"]["score"] >= self.cfg.min_score
 
     def _finish(self, offer, record):
+        # Push na telefon o okazji - niezależnie od maili i auto-zakupu (sniper/push.py, ntfy).
+        push = getattr(self, "push", None)
+        if push is not None:
+            try:
+                if push.wants(record):
+                    record["pushed"] = True
+                    push.notify_deal(record)
+            except Exception:
+                log.exception("[PUSH] Błąd przygotowania powiadomienia")
         if self.buyer is not None and self.buyer.wants(record):
             # Zakup najpierw, mail dopiero z jego wynikiem (jeden mail: „KUPIONE…” albo „NIE KUPIONO…”).
             record["notified"] = bool(self.notifier)

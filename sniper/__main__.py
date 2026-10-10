@@ -115,6 +115,13 @@ async def main():
     )
     notifier = EmailNotifier(cfg.smtp, log_dir=cfg.log_dir)
     evaluator = build_evaluator(cfg, notifier)
+    from .push import build_push
+    push = build_push(cfg)
+    if evaluator is not None:
+        evaluator.push = push
+    elif push is not None:
+        logging.getLogger("sniper").warning("[PUSH] Powiadomienia na telefon wymagają oceny AI (okazja = ocena AI) - "
+                                            "bez niej nic nie zostanie wysłane.")
     buyer = await build_buyer(cfg, notifier, evaluator)
     scout = Scout(cfg, session, notifier, evaluator, buyer)
     from .mirror import build_mirror
@@ -132,6 +139,8 @@ async def main():
         if buyer:
             await buyer.shutdown()       # dokończ zakup w toku, zamknij przeglądarkę konta
         await notifier.drain()
+        if push:
+            await push.drain()
         await session.close()
         if mirror:
             mirror.sync_once()           # ostatnia kopia przy zamknięciu

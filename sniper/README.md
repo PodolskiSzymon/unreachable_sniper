@@ -180,6 +180,22 @@ albo „OKAZJA - NIE KUPIONO” z powodem. W heartbeacie: linia `AUTO-BUY: …`.
 i potencjalny zysk według AI, uzasadnienie, czerwone flagi, zdjęcie. Filtry (okazje / 8+), sortowanie, szukajka;
 strona odświeża się sama co minutę. Odbudowa z całej historii: `python -m sniper.report`.
 
+## Powiadomienia na telefon (push, ntfy)
+
+Przy okazji (ocena AI >= `SNIPER_NTFY_MIN_SCORE`, domyślnie jak próg maila) telefon pokazuje wyskakujące powiadomienie
+z tytułem, ceną z wysyłką, oceną, zyskiem wg AI i zdjęciem; dotknięcie otwiera ofertę. Działa niezależnie od maili
+i auto-zakupu, wysyłka bez proxy (`sniper/push.py`).
+
+1. Zainstaluj aplikację **ntfy** (Google Play / F-Droid / App Store).
+2. W aplikacji „+” → „Subskrybuj temat” → wpisz długą, losową nazwę (np. `sniper-k7q2m9x4p1`) – serwer `ntfy.sh`.
+3. W `sniper/.env`: `SNIPER_NTFY_TOPIC=sniper-k7q2m9x4p1` (ta sama nazwa).
+4. Test: `python -m sniper.push` (albo `.\start.bat push`) – na telefonie powinno pojawić się „Okazja 9/10 …”.
+5. **Unikalny dźwięk (Android)**: okazje idą z priorytetem 5 („max”), a ntfy ma osobny kanał powiadomień na każdy
+   priorytet. Przytrzymaj powiadomienie testowe → ikona ustawień (albo Ustawienia → Aplikacje → ntfy → Powiadomienia)
+   → kanał najwyższego priorytetu → **Dźwięk** → wybierz własny (np. plik MP3 skopiowany do folderu
+   `Notifications`/`Powiadomienia` w telefonie). Tam też: „Wyświetlaj na ekranie” / „Wyskakujące” = włączone.
+   iPhone: powiadomienie ma priorytet „time-sensitive”, ale własnego dźwięku dla jednego tematu iOS nie pozwala ustawić.
+
 ## Alerty e-mail
 
 Bez modułu AI każda złapana oferta idzie mailem (z AI – tylko okazje i nieocenione) przez Onet (`smtp.poczta.onet.pl:465`, SSL).
