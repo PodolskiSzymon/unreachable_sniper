@@ -419,6 +419,9 @@ class ScoutConfig:
     session_max_age_min: float = _env_float("SNIPER_SESSION_MAX_AGE", 360.0)
     # Folder na logi: sniper.log (rotacja co północ, 30 dni) + offers.jsonl (złapane oferty)
     log_dir: str = _env("SNIPER_LOG_DIR") or str(Path(__file__).with_name("logs"))
+    # Kopia logów i oceny.html do drugiego folderu, np. na Dysk Google (puste = wyłączone). Patrz sniper/mirror.py.
+    mirror_dir: str = _env("SNIPER_MIRROR_DIR")
+    mirror_interval_min: float = _env_float("SNIPER_MIRROR_INTERVAL_MIN", 2.0)
 
     smtp: SmtpConfig = field(default_factory=SmtpConfig)
     ai: AiConfig = field(default_factory=AiConfig)

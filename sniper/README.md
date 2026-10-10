@@ -212,6 +212,13 @@ nigdy w repo ani w czacie. To tylko narzędzie diagnostyczne - przeglądarka kon
 
 ## Logi
 
+* **Kopia na Dysk Google**: ustaw `SNIPER_MIRROR_DIR` (np. `G:\Mój dysk\sniper` z Google Drive dla komputerów) –
+  co `SNIPER_MIRROR_INTERVAL_MIN` minut (domyślnie 2) program kopiuje tam `oceny.html`, `sniper.log`, `evaluations.*`,
+  `offers.jsonl`, `mails.csv`, `session_events.csv`, `traffic.csv`, `bought.jsonl`. `session.json` (ciastka) i profil
+  przeglądarki NIE są kopiowane. Logi nadal powstają w `sniper/logs`.
+* **Czemu `oceny.html` jest puste?** `python -m sniper.report --stats` – ile ofert oceniono, rozkład ocen, najczęstsze
+  powody odrzucenia przed AI (słowa wykluczające, brak słowa kluczowego, cena) i najwyżej ocenione oferty.
+
 * `logs/session_events.csv` – dziennik sesji konta (Excel): kiedy wykryto brak zalogowania (z powodem, po ilu minutach
   sesji, ile był ważny token), kiedy wykryto ponowne zalogowanie (po jakiej przerwie), każde udane / nieudane
   podtrzymanie. Te same informacje są w mailach „sesja padła” / „wróciła” i w liniach `[SESJA]` w `sniper.log`.

@@ -254,9 +254,54 @@ class ReportWriter:
             log.warning("[RAPORT] Nie zapisałem %s: %s", self.path, exc)
 
 
-def main():
+def stats(jsonl_path, above, top=5):
+    """Podsumowanie evaluations.jsonl: ile ofert w jakim statusie, rozkład ocen, najczęstsze powody odrzucenia.
+
+    Odpowiada na pytanie „czemu oceny.html jest puste?” (np. wszystko odfiltrowane przed AI albo oceny <= progu).
+    """
+    import re
+    from collections import Counter
+    statuses, scores, reasons, best = Counter(), Counter(), Counter(), []
+    try:
+        lines = Path(jsonl_path).read_text(encoding="utf-8").splitlines()
+    except OSError:
+        return f"Brak pliku {jsonl_path} - program jeszcze niczego nie ocenił na tym komputerze."
+    for line in lines:
+        try:
+            r = json.loads(line)
+        except ValueError:
+            continue
+        statuses[r.get("status", "?")] += 1
+        score = (r.get("evaluation") or {}).get("score")
+        if isinstance(score, (int, float)):
+            scores[int(score)] += 1
+            best.append((score, (r.get("offer") or {}).get("title", "?"), (r.get("offer") or {}).get("total_price")))
+        why = r.get("prefilter_reason") or (r.get("error") if r.get("status") == "nieoceniona" else None)
+        if why:
+            reasons[re.sub(r"\d[\d .,]*", "N", str(why))[:90]] += 1
+    out = [f"Ofert w {Path(jsonl_path).name}: {sum(statuses.values())}",
+           "Statusy: " + (", ".join(f"{k} {v}" for k, v in statuses.most_common()) or "-"),
+           "Oceny AI: " + (", ".join(f"{k}: {scores[k]}" for k in sorted(scores)) or "brak ocen"),
+           f"W oceny.html (ocena > {above:g}): {sum(v for k, v in scores.items() if k > above)}"]
+    if reasons:
+        out.append("Najczęstsze powody odrzucenia / błędy:")
+        out += [f"  {v:5d} x {k}" for k, v in reasons.most_common(8)]
+    if best:
+        out.append(f"Najwyżej ocenione ({top}):")
+        out += [f"  {s:g}/10 | {t} | {p} zł" for s, t, p in sorted(best, key=lambda x: -x[0])[:top]]
+    return "\n".join(out)
+
+
+def main(argv=None):
+    import argparse
     from .config import ScoutConfig
+    parser = argparse.ArgumentParser(description="Podgląd ocen AI: logs/oceny.html")
+    parser.add_argument("--stats", action="store_true", help="tylko podsumowanie evaluations.jsonl (bez HTML)")
+    args = parser.parse_args(argv)
     cfg = ScoutConfig()
+    if args.stats:
+        print(stats(Path(cfg.log_dir) / "evaluations.jsonl", cfg.ai.report_above))
+        return
     writer = ReportWriter(cfg.log_dir, cfg.ai.report_above)
     print(f"Zapisano {writer.path.resolve()} ({len(writer.records)} ofert z oceną powyżej "
           f"{cfg.ai.report_above:g}). Otwórz go w przeglądarce.")

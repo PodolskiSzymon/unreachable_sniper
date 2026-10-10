@@ -117,9 +117,14 @@ async def main():
     evaluator = build_evaluator(cfg, notifier)
     buyer = await build_buyer(cfg, notifier, evaluator)
     scout = Scout(cfg, session, notifier, evaluator, buyer)
+    from .mirror import build_mirror
+    mirror = build_mirror(cfg)
+    mirror_task = asyncio.create_task(mirror.run(), name="log-mirror") if mirror else None
     try:
         await scout.run()
     finally:
+        if mirror_task:
+            mirror_task.cancel()
         await scout.shutdown()
         if evaluator:
             await evaluator.drain()      # oceny w locie -> ich maile trafiają do notifier (albo do buyera)
@@ -128,6 +133,8 @@ async def main():
             await buyer.shutdown()       # dokończ zakup w toku, zamknij przeglądarkę konta
         await notifier.drain()
         await session.close()
+        if mirror:
+            mirror.sync_once()           # ostatnia kopia przy zamknięciu
 
 
 if __name__ == "__main__":
