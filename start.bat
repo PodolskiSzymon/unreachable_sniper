@@ -1,16 +1,25 @@
 @echo off
-rem Start Snipera z jego wlasnym srodowiskiem .venv (bez recznego activate).
-rem Uzycie: dwuklik albo w terminalu:  .\start.bat   (dodatkowe argumenty przechodza dalej,
+rem Start Snipera. Uzywa Pythona z .venv, a gdy tam brak bibliotek - Pythona systemowego (python z PATH).
+rem Uzycie: dwuklik albo w terminalu:  .\start.bat   (argumenty przechodza dalej,
 rem np. .\start.bat account_session --login  ->  python -m sniper.account_session --login)
 cd /d "%~dp0"
-if not exist ".venv\Scripts\python.exe" (
-  echo Brak .venv - najpierw: python -m venv .venv  i  .venv\Scripts\python.exe -m pip install -r sniper\requirements.txt
+set "PY="
+if exist ".venv\Scripts\python.exe" (
+  ".venv\Scripts\python.exe" -c "import aiosmtplib, httpx, playwright" >nul 2>&1 && set "PY=.venv\Scripts\python.exe"
+)
+if not defined PY (
+  python -c "import aiosmtplib, httpx, playwright" >nul 2>&1 && set "PY=python"
+)
+if not defined PY (
+  echo Brak bibliotek Snipera. Zainstaluj je raz:
+  echo     python -m pip install -r sniper\requirements.txt
   pause
   exit /b 1
 )
+echo [start.bat] Python: %PY%
 if "%~1"=="" (
-  ".venv\Scripts\python.exe" -m sniper
+  "%PY%" -m sniper
 ) else (
-  ".venv\Scripts\python.exe" -m sniper.%*
+  "%PY%" -m sniper.%*
 )
 if errorlevel 1 pause
