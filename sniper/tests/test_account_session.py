@@ -610,3 +610,25 @@ def test_guest_token_is_not_a_session(tmp_path):
     account.context = _Ctx([{"name": "access_token_web", "value": guest}])
     assert asyncio.run(account.refresh_and_check(navigate=False)) is False
     assert asyncio.run(account.refresh_and_check()) is False and "access_token_web" in account.last_reason
+
+
+def test_passive_check_logs_login_only_on_change(tmp_path, caplog):
+    """Sprawdzenia co 1-2 min nie mogą zalewać logu „Zalogowany jako” (noc 2026-10-11: 352 linie)."""
+    import asyncio
+    import logging
+    body = '{"banners":{"x":{"extra":{"invite_url":"https://www.vinted.pl/invite/koala_test/tok"}}},"code":0}'
+    account = acc.VintedAccount(_cfg(tmp_path), tmp_path)
+    account.page = GuestPage(login_visible=False)
+    account.page._banners = {"status": 200, "body": body}
+    account.page.goto_urls.append("https://www.vinted.pl/")
+    with caplog.at_level(logging.INFO, logger="sniper.account"):
+        for _ in range(3):
+            assert asyncio.run(account.refresh_and_check(navigate=False)) is True
+    assert sum("Zalogowany jako" in r.getMessage() for r in caplog.records) == 1
+
+
+def test_refresh_ahead_default_matches_vinted_refresh_window():
+    """Vinted wymienia token przy <~5 min do końca - domyślny zapas 2-4 min = jedno wejście na stronę."""
+    from sniper.config import DelayConfig
+    low, high = DelayConfig().refresh_ahead_min
+    assert 1 <= low <= high <= 5

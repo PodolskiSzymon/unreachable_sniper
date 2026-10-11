@@ -307,8 +307,10 @@ class DelayConfig:
     session_watch_s: tuple = _env_range("SCRAPER_SESSION_WATCH_S", (60.0, 120.0))
     # Czekanie na Twoje ręczne logowanie w oknie bota: sprawdzanie co tyle SEKUND (bez przeładowania strony).
     login_check_s: tuple = _env_range("SCRAPER_LOGIN_CHECK_S", (5.0, 10.0))
-    # Odśwież sesję (wejście na stronę) na tyle MINUT przed wygaśnięciem tokenu dostępu (exp z JWT, żyje ~1 h).
-    refresh_ahead_min: tuple = _env_range("SCRAPER_REFRESH_AHEAD_MIN", (8.0, 12.0))
+    # Odśwież sesję (wejście na stronę) na tyle MINUT przed wygaśnięciem tokenu dostępu (exp z JWT, żyje 60 min).
+    # Log nocny 2026-10-11: JS Vinted wymienia token dopiero, gdy zostało ~<5 min - przy 8-12 min zapasu bot wchodził
+    # na stronę co minutę przez ~5 min, zanim token się odświeżył. 2-4 min = jedno wejście wystarcza.
+    refresh_ahead_min: tuple = _env_range("SCRAPER_REFRESH_AHEAD_MIN", (2.0, 4.0))
     # Sesja „padła” dopiero po tylu nieudanych sprawdzeniach Z RZĘDU (jedno potknięcie = chwilowy błąd, nie wylogowanie),
     # z przerwą tyle SEKUND między nimi.
     session_fail_checks: int = _env_int("SCRAPER_SESSION_FAIL_CHECKS", 3)

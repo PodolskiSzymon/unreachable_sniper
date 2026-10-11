@@ -138,7 +138,7 @@ w kółko.
 
 Uwaga: Vinted ma ochronę anty-bot (datadome). Zbyt częste automatyczne wejścia mogą ją wywołać - dlatego
 podtrzymanie jest rzadkie i losowe (`SCRAPER_KEEPALIVE_MIN`, domyślnie 15-25 min), ale zawsze przed wygaśnięciem
-tokenu dostępu: bot czyta `exp` z JWT `access_token_web` i wchodzi na stronę ~8-12 min wcześniej
+tokenu dostępu: bot czyta `exp` z JWT `access_token_web` i wchodzi na stronę ~2-4 min wcześniej (JS Vinted wymienia token dopiero przy <~5 min do końca)
 (`SCRAPER_REFRESH_AHEAD_MIN`). Sesja „padła” dopiero po 3 nieudanych sprawdzeniach z rzędu co 30-60 s
 (`SCRAPER_SESSION_FAIL_CHECKS`, `SCRAPER_SESSION_RETRY_S`) - każda porażka jest w logu z powodem. Przed odświeżeniem
 bot zamyka dodatkowe karty w swoim oknie (dwie karty = dwa odświeżenia tym samym refresh tokenem = ryzyko

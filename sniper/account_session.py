@@ -311,6 +311,7 @@ class VintedAccount:
         self.journal = SessionJournal(self.log_dir)  # logs/session_events.csv - kiedy i dlaczego sesja pada
         self.last_auth_traffic = []                 # zapytania o token/sesję z ostatniego wejścia na stronę
         self._last_diag = float("-inf")             # ostatnia linia diagnostyczna przy czekaniu na logowanie
+        self._passive_ok = False                    # ostatnie szybkie sprawdzenie udane (log tylko przy zmianie)
 
     async def start(self):
         """Uruchamia przeglądarkę i sprawdza sesję. Niezalogowany -> okno ZOSTAJE na stronie głównej do logowania."""
@@ -652,16 +653,14 @@ class VintedAccount:
             _, name = detect_banners(body)
             if name:
                 self.username = name
-                log.info("[KONTO] Zalogowany jako: %s", name)
-                await self._log_cookies("po wykryciu zalogowania")
-                return True
+                return await self._passive_success(f"Zalogowany jako: {name}")
             if status == 200 and '"code":0' in body:
                 login_button = await self._login_button_visible()
                 if not login_button and token and not is_guest_token(token):
-                    log.info("[KONTO] Sesja aktywna (banner bez nazwy, bez „Zaloguj się”, z tokenem konta).")
-                    await self._log_cookies("po wykryciu zalogowania")
-                    return True
+                    return await self._passive_success(
+                        "Sesja aktywna (banner bez nazwy, bez „Zaloguj się”, z tokenem konta).")
         self.username = None
+        self._passive_ok = False
         now = _t.monotonic()
         if now - self._last_diag >= 60:
             self._last_diag = now
@@ -671,6 +670,17 @@ class VintedAccount:
                      {True: "TAK", False: "nie", None: "?"}[login_button], "jest" if token else "BRAK",
                      len(getattr(self.context, "pages", []) or []))
         return False
+
+    async def _passive_success(self, text):
+        """Szybkie sprawdzenie udane. Log (INFO + ciastka) tylko przy ZMIANIE stanu - sprawdzenia co 1-2 min
+        zalewały log (noc 2026-10-11: 352 x „Zalogowany jako” + raport ciastek)."""
+        if self._passive_ok:
+            log.debug("[KONTO] %s", text)
+        else:
+            log.info("[KONTO] %s", text)
+            await self._log_cookies("po wykryciu zalogowania")
+        self._passive_ok = True
+        return True
 
     async def _login_button_visible(self):
         """True = na stronie widać „Zaloguj się” (gość). None = nie da się sprawdzić."""
