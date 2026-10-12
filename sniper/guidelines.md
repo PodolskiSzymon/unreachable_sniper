@@ -23,6 +23,8 @@ i zawierają korektę dla serii 3000 (-250 zł) - NIE odejmuj jej drugi raz.
 Dla kart 4050, 3060, 5050, 4060, 3070, 5060, 4070, 3080, 5070, 4080 i 5070 Ti sprzedaję drożej niż dolna granica
 widełek: do wzoru brana jest „Cena sprzedaży do wzoru” (górna granica wąskich widełek, środek szerokich), a wymagany
 zysk zostaje taki, jak policzony od dolnej granicy - czyli względem ceny sprzedaży jest niższy niż we wzorze wyżej.
+Dla 4060, 3070, 5060, 4070, 5070, 3080, 5070 Ti i 4080 wymagany zysk jest dodatkowo obniżony do 600-800 zł
+(rośnie z ceną: 4060 600 zł ... 4080 800 zł) - progi w tabeli już to uwzględniają.
 Pozostałe karty: cena sprzedaży do wzoru = dolna granica widełek.
 Tę samą „Cenę sprzedaży do wzoru” przyjmuj jako realną cenę sprzedaży (market_value_pln) sztuki w dobrym stanie.
 
@@ -51,48 +53,48 @@ Tę samą „Cenę sprzedaży do wzoru” przyjmuj jako realną cenę sprzedaży
 4. RTX 4060
 - Szacowana cena sprzedaży: 3050 - 3150 zł
 - Cena sprzedaży do wzoru: 3150 zł
-- Wymagany zysk: 850 zł
-- Maksymalna cena zakupu: poniżej 2150 zł
+- Wymagany zysk: 600 zł
+- Maksymalna cena zakupu: poniżej 2400 zł
 - Notatki: Obecnie najbardziej pożądana karta na rynku. Idealny materiał na błyskawiczny flip.
 
 5. RTX 3070 / 3070 Ti
 - Szacowana cena sprzedaży: 3400 - 3600 zł
 - Cena sprzedaży do wzoru: 3600 zł
-- Wymagany zysk: 950 zł
-- Maksymalna cena zakupu: poniżej 2250 zł
+- Wymagany zysk: 650 zł
+- Maksymalna cena zakupu: poniżej 2550 zł
 - Notatki: Mocna w rasteryzacji, rynek wycenia ją stabilnie. Bezpieczna marża przy zachowaniu dyscypliny cenowej przy zakupie.
 
 6. RTX 4070
 - Szacowana cena sprzedaży: 4000 - 4500 zł
 - Cena sprzedaży do wzoru: 4500 zł
-- Wymagany zysk: 1100 zł
-- Maksymalna cena zakupu: poniżej 3250 zł
+- Wymagany zysk: 700 zł
+- Maksymalna cena zakupu: poniżej 3650 zł
 - Notatki: Klienci w tym segmencie są bardziej wymagający.
 
 7. RTX 3080 (16 GB VRAM)
 - Szacowana cena sprzedaży: 4600 - 6000 zł
 - Cena sprzedaży do wzoru: 5300 zł
-- Wymagany zysk: 1150 zł
-- Maksymalna cena zakupu: poniżej 3750 zł
+- Wymagany zysk: 750 zł
+- Maksymalna cena zakupu: poniżej 4150 zł
 - Notatki: Główna dźwignia to 16 GB VRAM. Właściwe reklamowanie i pozycjonowanie na tle nowszego modelu 4070 (ograniczonego do 8 GB) pozwala na domykanie sprzedaży w górnych widełkach.
 
 8. RTX 5060
 - Szacowana cena sprzedaży: 3700 - 3800 zł
 - Cena sprzedaży do wzoru: 3800 zł
-- Wymagany zysk: 1050 zł
-- Maksymalna cena zakupu: poniżej 2600 zł
+- Wymagany zysk: 650 zł
+- Maksymalna cena zakupu: poniżej 3000 zł
 
 9. RTX 5070
 - Szacowana cena sprzedaży: 4800 - 5200 zł
 - Cena sprzedaży do wzoru: 5200 zł
-- Wymagany zysk: 1200 zł
-- Maksymalna cena zakupu: poniżej 3850 zł
+- Wymagany zysk: 700 zł
+- Maksymalna cena zakupu: poniżej 4350 zł
 
 10. RTX 4080
 - Szacowana cena sprzedaży: 6000 - 7500 zł
 - Cena sprzedaży do wzoru: 6750 zł
-- Wymagany zysk: 1400 zł
-- Maksymalna cena zakupu: poniżej 5200 zł
+- Wymagany zysk: 800 zł
+- Maksymalna cena zakupu: poniżej 5800 zł
 
 11. RTX 4090
 - Szacowana cena sprzedaży: 9000 zł
@@ -108,8 +110,8 @@ Tę samą „Cenę sprzedaży do wzoru” przyjmuj jako realną cenę sprzedaży
 13. RTX 5070 Ti
 - Szacowana cena sprzedaży: 6000 - 7000 zł
 - Cena sprzedaży do wzoru: 6500 zł
-- Wymagany zysk: 1400 zł
-- Maksymalna cena zakupu: poniżej 4950 zł
+- Wymagany zysk: 750 zł
+- Maksymalna cena zakupu: poniżej 5600 zł
 
 14. RTX 5080
 - Szacowana cena sprzedaży: 9000 – 10 000 zł
@@ -135,7 +137,7 @@ dodaj premię zależną od wysokości tego progu:
 - próg 2000 - 2999 zł: +250 zł
 - próg 3000 - 4999 zł: +350 zł
 - próg 5000 zł i więcej: +500 zł
-Przykład: RTX 4060 z Polski - próg 2150 zł + 250 zł = 2400 zł. Laptop zza granicy (albo gdy kraj sprzedawcy
+Przykład: RTX 4060 z Polski - próg 2400 zł + 250 zł = 2650 zł. Laptop zza granicy (albo gdy kraj sprzedawcy
 jest nieznany) - bez premii.
 3. STAN WIZUALNY - NIE PRZESADZAJ: to sprzęt używany, odsprzedaję go po wyczyszczeniu.
 - NIE są czerwoną flagą ani powodem do obniżenia oceny: kurz, włosy, sierść, okruchy, odciski palców, smugi,
