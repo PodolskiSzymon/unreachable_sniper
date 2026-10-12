@@ -53,7 +53,7 @@ EVALUATION_SCHEMA = {
         "gpu_model": _nullable("string", "Rozpoznana karta graficzna, np. 'RTX 4060'; null gdy nieznana."),
         "laptop_model": _nullable("string", "Model laptopa / konfiguracja, jeśli da się ustalić."),
         "market_value_pln": _nullable("number", "Realna cena szybkiej sprzedaży w PLN."),
-        "max_buy_price_pln": _nullable("number", "Maksymalna cena zakupu z wytycznych dla tej karty po wszystkich korektach (seria 3000, kraj sprzedawcy)."),
+        "max_buy_price_pln": _nullable("number", "Maksymalna cena zakupu z wytycznych dla tej karty po korektach z zasad dodatkowych (np. premia za Polskę; seria 3000 jest już w tabeli)."),
         "potential_profit_pln": _nullable("number", "market_value_pln - cena łączna - 150 zł kosztów."),
         "photos_seen": {"type": "integer", "description": "Ile zdjęć z ogłoszenia faktycznie widzisz (0 = żadnego)."},
         "photo_notes": {"type": "string", "description": "1-2 zdania: co konkretnie widać na zdjęciach (stan, "
@@ -75,11 +75,12 @@ Jak oceniać:
 1. Ustal kartę graficzną (i jeśli się da: model laptopa, procesor, RAM, ekran) z tytułu, opisu i zdjęć \
 (naklejki, zrzuty z menedżera urządzeń / dxdiag / BIOS). Gdy karty nie da się ustalić, napisz to i oceń ostrożnie.
 2. Cena zakupu = cena łączna (cena + wysyłka). Porównaj ją z „Maksymalną ceną zakupu” dla tej karty \
-z wytycznych, po wszystkich korektach z zasad dodatkowych (np. seria 3000, kraj sprzedawcy).
+z wytycznych, po korektach z zasad dodatkowych (np. premia za kraj sprzedawcy).
 3. market_value_pln = realna cena szybkiej sprzedaży tej konkretnej sztuki (karta, konfiguracja, stan) według \
 wytycznych. potential_profit_pln = market_value_pln - cena łączna - 150 zł (prowizje, przesyłka, negocjacje).
-4. Obejrzyj zdjęcia: pęknięta lub porysowana matryca, uszkodzona obudowa lub zawiasy, brak ładowarki, \
-zdjęcia stockowe albo z internetu zamiast prawdziwych, ekran z hasłem BIOS / blokadą. \
+4. Obejrzyj zdjęcia: pęknięta lub wyraźnie uszkodzona matryca, uszkodzona obudowa lub zawiasy, brak ładowarki, \
+zdjęcia stockowe albo z internetu zamiast prawdziwych, ekran z hasłem BIOS / blokadą. Kurz, włosy, odciski \
+palców, smugi i odbicia światła to NIE rysy ani uszkodzenia - w razie wątpliwości traktuj je jako zabrudzenie. \
 W photos_seen i photo_notes podaj zgodnie z prawdą, ile zdjęć widzisz i co na nich jest - nie zgaduj.
 5. Czerwone flagi: wszystko z wytycznych oraz blokady (BIOS, konto Microsoft, MDM/firmowe), „na części”, \
 „nie włącza się”, niespójności między tytułem, opisem i zdjęciami, cena podejrzanie niska jak na model, \
