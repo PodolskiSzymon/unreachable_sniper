@@ -337,3 +337,23 @@ def test_watch_between_keepalives_detects_logout_quickly(tmp_path):
         await asyncio.wait_for(buyer._wait_watching(3600), timeout=5)   # wraca od razu po wykryciu
     asyncio.run(scenario())
     assert calls == [False, False, False]                               # bez przeładowania strony
+
+
+def test_network_outage_is_not_session_loss(tmp_path):
+    """Log 2026-10-11 20:39: 3 x net::ERR_CONNECTION_RESET -> było „sesja padła” + mail. Teraz: bez wstrzymania."""
+    account = FakeAccount()
+    buyer, _ = make_buyer(tmp_path, account=account)
+    buyer.notifier = AlertNotifier()
+
+    async def scenario():
+        assert await buyer.start()
+
+        async def verify():
+            account.network_down = True
+            return False
+        account.verify_session = verify
+        await buyer.check_session()
+        await buyer.shutdown()
+
+    asyncio.run(scenario())
+    assert buyer.ready is True and buyer.notifier.alerts == [] and buyer._retry_soon is True

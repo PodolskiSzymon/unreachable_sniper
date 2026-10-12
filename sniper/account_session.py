@@ -196,6 +196,22 @@ def jwt_expiry(token):
         return None
 
 
+# Błędy sieci (brak internetu, zerwane połączenie, strona błędu Chrome) - to NIE wylogowanie z Vinted.
+# Log 2026-10-11 20:37-20:58: 3 x net::ERR_CONNECTION_RESET -> fałszywe „sesja padła” + mail (który i tak nie wyszedł).
+_NETWORK_HINTS = ("net::err_", "chrome-error://", "timeout", "timed out")
+
+
+def is_network_error(text):
+    """True = tekst błędu / adres wskazuje na problem z połączeniem, a nie na brak zalogowania."""
+    low = str(text or "").lower()
+    return any(h in low for h in _NETWORK_HINTS)
+
+
+def is_error_page(url):
+    """Strona błędu Chrome (np. po zerwaniu internetu) - nie ma na niej Vinted, nie da się nic sprawdzić."""
+    return str(url or "").startswith("chrome-error://")
+
+
 class SessionJournal:
     """Dziennik sesji konta -> logs/session_events.csv (otwórz w Excelu) + linie [SESJA] w logu.
 
@@ -253,6 +269,10 @@ class SessionJournal:
     def check_failed(self, attempt, total, reason, token_left=None):
         self._write("sprawdzenie_nieudane", powod=f"próba {attempt}/{total}: {reason}",
                     token_wazny_min=self._minutes(token_left))
+
+    def network_down(self, reason):
+        """Brak połączenia z Vinted (internet / sieć) - sesja NIE jest uznana za padniętą."""
+        self._write("brak_sieci", powod=reason)
 
     def up(self, konto, how):
         """Zalogowany (start albo wykryte ponowne zalogowanie). Zwraca opis do maila."""
@@ -312,6 +332,7 @@ class VintedAccount:
         self.last_auth_traffic = []                 # zapytania o token/sesję z ostatniego wejścia na stronę
         self._last_diag = float("-inf")             # ostatnia linia diagnostyczna przy czekaniu na logowanie
         self._passive_ok = False                    # ostatnie szybkie sprawdzenie udane (log tylko przy zmianie)
+        self.network_down = False                   # ostatnie verify_session nie udało się TYLKO przez błędy sieci
 
     async def start(self):
         """Uruchamia przeglądarkę i sprawdza sesję. Niezalogowany -> okno ZOSTAJE na stronie głównej do logowania."""
@@ -556,7 +577,13 @@ class VintedAccount:
         left = await self.token_expires_in()
         if left is not None:
             ahead = DelayConfig.pick(self.delays.refresh_ahead_min) * 60
-            delay = min(delay, max(60.0, left - ahead))
+            if left > ahead + 60:
+                delay = min(delay, left - ahead)
+            else:
+                # Już jesteśmy w oknie „przed wygaśnięciem”, a token się nie zmienił: JS Vinted wymienia go dopiero
+                # przy <~5 min do końca. Zamiast wchodzić na stronę CO MINUTĘ (log 2026-10-12: 12, 11, 9, 8, 7, 6, 5
+                # min przy SCRAPER_REFRESH_AHEAD_MIN=8-12) - jedno wejście ~1,5-2 min przed wygaśnięciem.
+                delay = min(delay, max(60.0, left - DelayConfig.pick((90.0, 120.0))))
         return delay
 
     async def verify_session(self):
@@ -566,6 +593,8 @@ class VintedAccount:
         wylogowanie - wcześniej jedna taka porażka od razu wstrzymywała auto-zakup i wysyłała mail.
         """
         attempts = max(1, int(self.delays.session_fail_checks))
+        network_failures = 0
+        self.network_down = False
         for i in range(1, attempts + 1):
             try:
                 # SCRAPER_KEEPALIVE_NAVIGATE=false: test bez przeładowania strony (czy to wejście na stronę wylogowuje).
@@ -578,6 +607,9 @@ class VintedAccount:
                 reason = self.last_reason
             except Exception as exc:
                 ok, reason = False, f"błąd: {str(exc)[:200]}"
+                self.last_reason = reason
+            if not ok and (is_network_error(reason) or is_error_page(getattr(self.page, "url", ""))):
+                network_failures += 1
             left = await self._safe_token_left()
             if ok:
                 if i > 1:
@@ -591,6 +623,13 @@ class VintedAccount:
             self.journal.check_failed(i, attempts, reason or "?", left)
             if i < attempts:
                 await self._pause(self.delays.session_retry_s)
+        if network_failures == attempts:
+            # Wszystkie próby padły na sieci - nie wiemy nic o sesji. Wołający NIE ogłasza wylogowania.
+            self.network_down = True
+            self.last_reason = f"brak połączenia z Vinted ({self.last_reason or '?'})"
+            log.warning("[KONTO] Wszystkie sprawdzenia padły na błędach SIECI - to nie wylogowanie. Sprawdź internet; "
+                        "ponowię za chwilę.")
+            self.journal.network_down(self.last_reason)
         return False
 
     async def _safe_token_left(self):
@@ -642,6 +681,13 @@ class VintedAccount:
             return ok
 
         url = self.page.url or ""
+        if is_error_page(url):
+            # Po zerwaniu internetu okno zostaje na stronie błędu Chrome i nic go stamtąd nie zabierało (log
+            # 2026-10-11 20:39-20:58). Na stronie błędu nikt nie wpisuje hasła, więc wejście na Vinted jest bezpieczne.
+            # Gdy sieci nadal nie ma, goto rzuci wyjątek = „nie wiem” (wołający ponowi).
+            log.info("[KONTO] Okno bota na stronie błędu Chrome (brak internetu?) - wracam na stronę główną Vinted.")
+            await self.page.goto(HOME_URL, wait_until="domcontentloaded")
+            url = self.page.url or ""
         status, name, login_button = None, None, None
         if "vinted." in url and not self.is_session_refresh(url):
             try:
@@ -717,11 +763,27 @@ class VintedAccount:
         if not self.is_session_refresh(self.page.url):
             return False
         try:
-            # /session-refresh to właśnie odświeżanie tokenu przez Vinted - dajemy mu czas (było 15 s).
-            await self.page.wait_for_url(lambda u: not self.is_session_refresh(u), timeout=45000)
+            # /session-refresh to właśnie odświeżanie tokenu przez Vinted - dajemy mu czas (było 15 s, potem 45 s).
+            await self.page.wait_for_url(lambda u: not self.is_session_refresh(u), timeout=90000)
+            log.info("[KONTO] Vinted odświeżył sesję przez /session-refresh.")
             return False
         except Exception:
-            return self.is_session_refresh(self.page.url)
+            stuck = self.is_session_refresh(self.page.url)
+            if stuck:
+                await self._describe_stuck_page()
+            return stuck
+
+    async def _describe_stuck_page(self):
+        """Co widać na /session-refresh, gdy utknęła (log 2026-10-12 17:22): tytuł, początek tekstu, zrzut ekranu.
+        Tekst strony (nie ciastka) - bez tokenów."""
+        try:
+            title = await self.page.title()
+            text = await self.page.evaluate("() => (document.body && document.body.innerText || '').slice(0, 300)")
+        except Exception as exc:
+            title, text = "?", f"(nie odczytałem: {exc})"
+        shot = await self._screenshot(self.page, "session_refresh_stuck.png")
+        log.warning("[KONTO] /session-refresh nie skończyło się w 90 s: tytuł „%s”, tekst: %s%s",
+                    title, " ".join(str(text).split())[:300] or "(pusty)", shot)
 
     async def open_item(self, url):
         """Otwiera ogłoszenie na zalogowanym koncie."""
@@ -1127,11 +1189,18 @@ class VintedAccount:
         low, high = self.delays.keepalive_min
         log.info("[KONTO] Podtrzymuję sesję co %.0f-%.0f min (losowo, czasem dłuższa pauza). Ctrl+C kończy.",
                  low, high)
+        retry_soon = False
         while True:
-            await asyncio.sleep(await self.next_keepalive_delay(pacer))
+            if retry_soon:                              # po błędach sieci: wkrótce, nie za 15-25 min
+                await self._pause(self.delays.session_retry_s)
+            else:
+                await asyncio.sleep(await self.next_keepalive_delay(pacer))
+            retry_soon = False
             try:
                 self.logged_in = await self.verify_session()
-                if not self.logged_in:
+                if not self.logged_in and self.network_down:
+                    retry_soon = True                   # brak internetu to nie wylogowanie
+                elif not self.logged_in:
                     self.journal.down(self.last_reason, await self._safe_token_left())
                     await self.focus()
                     log.warning("[KONTO] Sesja padła - zaloguj się ponownie w oknie bota, czekam.")

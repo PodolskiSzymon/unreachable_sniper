@@ -39,6 +39,7 @@ class AutoBuyer:
         self._lock = asyncio.Lock()          # przeglądarka: zakup i podtrzymanie sesji nigdy naraz
         self._tasks = []
         self._session_note = ""             # opis z dziennika sesji (logs/session_events.csv) do maila
+        self._retry_soon = False            # po błędzie sieci: następne sprawdzenie sesji za 30-60 s
         self.stats = {"submitted": 0, "bought": 0, "unconfirmed": 0, "skipped": 0, "error": 0}
 
     # ------------------------------------------------------------------ start / stop
@@ -200,6 +201,11 @@ class AutoBuyer:
             log.warning("[AUTO-BUY] Sesja konta wróciła - auto-zakup WZNOWIONY.")
             self._alert("[Sniper] Sesja konta Vinted wróciła - auto-zakup wznowiony",
                         "Sesja konta działa ponownie, auto-zakup jest wznowiony.\n\n" + (note or ""))
+        elif not alive and self.ready and getattr(self.account, "network_down", False) is True:
+            # Brak internetu / zerwane połączenie: nic nie wiemy o sesji - NIE wstrzymujemy i NIE wysyłamy maila
+            # (log 2026-10-11 20:39: fałszywe „sesja padła”). Ponowne sprawdzenie wkrótce.
+            self._retry_soon = True
+            log.warning("[AUTO-BUY] Brak połączenia z Vinted - to nie wylogowanie. Sprawdzę sesję ponownie za chwilę.")
         elif not alive and self.ready:
             self.ready = False
             token_left = None
@@ -268,7 +274,10 @@ class AutoBuyer:
         pacer = KeepalivePacer(self.delays)
         while True:
             # Wstrzymany auto-zakup = czekamy na Twoje logowanie w oknie: sprawdzanie co kilka s, bez przeładowania.
-            if self.ready:
+            if self.ready and getattr(self, "_retry_soon", False):
+                self._retry_soon = False                # po błędach sieci: ponowienie za 30-60 s
+                await asyncio.sleep(DelayConfig.pick(self.delays.session_retry_s))
+            elif self.ready:
                 # Przed wygaśnięciem tokenu dostępu (exp z JWT), nie w losowej chwili.
                 planner = getattr(self.account, "next_keepalive_delay", None)
                 try:

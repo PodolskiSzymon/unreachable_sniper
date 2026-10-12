@@ -632,3 +632,52 @@ def test_refresh_ahead_default_matches_vinted_refresh_window():
     from sniper.config import DelayConfig
     low, high = DelayConfig().refresh_ahead_min
     assert 1 <= low <= high <= 5
+
+
+def test_keepalive_inside_refresh_window_visits_once_before_expiry(tmp_path):
+    """Log 2026-10-12: zapas 8-12 min -> wejście co minutę przy 12, 11, 9 ... 5 min. Teraz jedno ~1,5-2 min przed exp."""
+    import asyncio
+    import time
+    from sniper.config import DelayConfig, KeepalivePacer
+    d = DelayConfig(keepalive_min=(15.0, 25.0), long_pause_every=(100.0, 100.0), refresh_ahead_min=(10.0, 10.0))
+    account = acc.VintedAccount(_cfg(tmp_path, delays=d), tmp_path)
+    account.context = _Ctx([{"name": "access_token_web", "value": _jwt(time.time() + 9 * 60)}])
+    delay = asyncio.run(account.next_keepalive_delay(KeepalivePacer(d)))
+    assert 7 * 60 - 5 <= delay <= 7.5 * 60 + 5
+
+
+def test_is_network_error():
+    assert acc.is_network_error("błąd: Page.goto: net::ERR_CONNECTION_RESET at https://www.vinted.pl/")
+    assert acc.is_network_error("Timeout 30000ms exceeded.")
+    assert not acc.is_network_error("401 z /api/v2/banners")
+    assert acc.is_error_page("chrome-error://chromewebdata/") and not acc.is_error_page("https://www.vinted.pl/")
+
+
+def test_verify_session_network_errors_are_not_logout(tmp_path, monkeypatch):
+    import asyncio
+    from sniper.config import DelayConfig
+    d = DelayConfig(session_fail_checks=3, session_retry_s=(0.0, 0.0))
+    account = acc.VintedAccount(_cfg(tmp_path, delays=d), tmp_path)
+
+    async def check(navigate=True):
+        raise RuntimeError("Page.goto: net::ERR_CONNECTION_RESET at https://www.vinted.pl/")
+    monkeypatch.setattr(account, "refresh_and_check", check)
+    assert asyncio.run(account.verify_session()) is False
+    assert account.network_down is True and "brak połączenia" in account.last_reason
+    assert "brak_sieci" in (tmp_path / "session_events.csv").read_text(encoding="utf-8-sig")
+
+    async def logged_out(navigate=True):
+        account.last_reason = "401 z /api/v2/banners"
+        return False
+    monkeypatch.setattr(account, "refresh_and_check", logged_out)
+    assert asyncio.run(account.verify_session()) is False and account.network_down is False
+
+
+def test_passive_check_leaves_chrome_error_page(tmp_path):
+    """Po zerwaniu internetu okno stało na chrome-error:// - sprawdzenie bez przeładowania nic nie widziało."""
+    import asyncio
+    account = _account_with_page(tmp_path, {"status": 200, "body": '{"code":0,"user":{"login":"ja"}}'})
+    account.page.goto_urls.append("chrome-error://chromewebdata/")
+    account.context = _Ctx([])
+    asyncio.run(account.refresh_and_check(navigate=False))
+    assert account.page.goto_urls[-1] == acc.HOME_URL
