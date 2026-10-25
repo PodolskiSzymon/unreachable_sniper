@@ -142,6 +142,10 @@ def test_guidebook_paths_and_gate(tmp_path):
     assert book.gate("phone", "Nokia 3310", 5000.0, 1.25) is None                # brak wiersza → AI
     (folder / "laptop.md").write_text(LAPTOP_GUIDE, encoding="utf-8")
     assert book.path("laptop") == folder / "laptop.md"
+    laptop_text = book.text("laptop")                        # dane rynku + ręczne wytyczne jako uzupełnienie
+    assert laptop_text.startswith("# Laptopy") and "ręczne wytyczne użytkownika" in laptop_text
+    assert laptop_text.endswith("RTX 4060: max 1950 zł") and "RTX 4060: max" not in book.text("phone")
+    assert [r.name for r in book.match("laptop", "Legion RTX 4060")] == ["RTX 4060"]
 
 
 # ----------------------------------------------------------------------------- ocena per kategoria

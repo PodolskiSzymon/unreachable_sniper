@@ -94,7 +94,8 @@ w ≤ 7 dni według wytycznych (mocniejsza konfiguracja / komplet / gwarancja �
 3. potential_profit_pln = market_value_pln - cena łączna - koszty transakcji z wytycznych (gdy wytyczne ich nie \
 podają: 150 zł). margin_pct = zysk / market_value_pln * 100. meets_profit_rule = zysk i marża spełniają regułę \
 minimalnego zysku z wytycznych (albo, gdy wytyczne jej nie mają, cena łączna ≤ maksymalna cena zakupu po korektach \
-z zasad dodatkowych, np. premia za kraj sprzedawcy). max_buy_price_pln = najwyższa cena łączna spełniająca regułę.
+z zasad dodatkowych). max_buy_price_pln = najwyższa cena łączna spełniająca regułę. Uwzględnij kraj sprzedawcy, \
+jeśli wytyczne coś o nim mówią.
 4. Obejrzyj zdjęcia: pęknięty lub wyraźnie uszkodzony ekran, uszkodzona obudowa / zawiasy / złącza, brak ładowarki \
 (laptop), zdjęcia stockowe albo z internetu zamiast prawdziwych, ekran blokady (BIOS, iCloud, konto Google / \
 Microsoft, MDM). Kurz, włosy, odciski palców, smugi i odbicia światła to NIE rysy ani uszkodzenia - w razie \

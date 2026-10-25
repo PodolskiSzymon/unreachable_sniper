@@ -154,7 +154,17 @@ class GuideBook:
         return self._files.setdefault(path, _File(path)).get()
 
     def text(self, category):
-        return self._file(category).text
+        """Tekst dla modelu. Laptopy z guides/laptop.md (dane rynku) + ręczne guidelines.md użytkownika jako uzupełnienie
+        (notatki o modelach, stan, czerwone flagi, karty spoza tabeli rynku)."""
+        text = self._file(category).text
+        if category == "laptop" and self.path(category) != self.fallback.path:
+            try:
+                manual = self.fallback.get().text
+            except OSError:
+                manual = ""
+            if manual:
+                text += "\n\n## Uzupełnienie: ręczne wytyczne użytkownika (laptopy)\n\n" + manual
+        return text
 
     def match(self, category, title, relaxed=False):
         try:

@@ -623,7 +623,9 @@ def test_seller_country_and_poland_rule_reach_model(tmp_path):
     unknown = laptop(seller=Seller(*[None] * 8))
     assert "kraj: nieznany" in offer_text(unknown)
     guidelines = Path("sniper/guidelines.md").read_text(encoding="utf-8")
-    assert "PREMIA ZA POLSKĘ" in guidelines and "+150 zł" in guidelines
+    # 2026-10-25: premia za Polskę łamała minimalną marżę - zostaje tylko jako wyższa ocena, bez podnoszenia progu
+    assert "POLSKA (PŁYNNOŚĆ)" in guidelines and "NIE podnoś maksymalnej ceny" in guidelines
+    assert "+150 zł" not in guidelines and "46 zł" in guidelines
     assert "kraj sprzedawcy" in system_text(guidelines)
 
 
