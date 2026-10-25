@@ -22,6 +22,7 @@ log = logging.getLogger("sniper.categories")
 CATEGORY_OF_CATALOG = {3580: "laptop", 3661: "phone", 3728: "tablet", 3025: "console"}
 # Katalogi mieszane → jakie nasze kategorie mogą w nich być (kolejność = pierwszeństwo dopasowania tytułu).
 MIXED_CATALOGS = {3582: ("gpu", "storage", "ram"), 3583: ("storage",), 3584: ("ram", "storage", "gpu")}
+AI_ENABLED_NAMES = ("laptop", "phone", "tablet", "console", "gpu", "ram", "storage")   # SNIPER_CATEGORIES
 CATEGORY_NAMES = {"laptop": "laptopy", "phone": "telefony", "tablet": "tablety", "console": "konsole",
                   "gpu": "karty graficzne", "ram": "pamięci RAM", "storage": "dyski SSD"}
 
@@ -52,17 +53,29 @@ class CatalogSpec:
         return max(1, self.weight or DEFAULT_WEIGHTS.get(self.catalog_id, 1))
 
     @property
-    def label(self):
+    def categories(self):
+        """Nasze kategorie w tym katalogu ([] = katalog spoza listy, dawny tryb jednego katalogu)."""
         try:
             cid = int(self.catalog_id)
         except (TypeError, ValueError):
-            cid = None
-        cats = [CATEGORY_OF_CATALOG[cid]] if cid in CATEGORY_OF_CATALOG else list(MIXED_CATALOGS.get(cid, ()))
-        names = "/".join(CATEGORY_NAMES.get(c, c) for c in cats) or "katalog"
+            return []
+        return [CATEGORY_OF_CATALOG[cid]] if cid in CATEGORY_OF_CATALOG else list(MIXED_CATALOGS.get(cid, ()))
+
+    @property
+    def label(self):
+        names = "/".join(CATEGORY_NAMES.get(c, c) for c in self.categories) or "katalog"
         return f"{self.catalog_id} ({names}) {self.price_from or '0'}-{self.price_to or '∞'} zł"
 
 
-def category_for(catalog_id, title):
+def wanted_specs(specs, enabled):
+    """Katalogi z co najmniej jedną włączoną kategorią (SNIPER_CATEGORIES; puste = wszystkie). Katalog spoza listy
+    (tryb jednego katalogu) zostaje zawsze."""
+    if not enabled:
+        return list(specs)
+    return [s for s in specs if not s.categories or set(s.categories) & set(enabled)]
+
+
+def category_for(catalog_id, title, enabled=None):
     """Nasza kategoria oferty albo None (pomiń: w katalogu mieszanym to nie karta / RAM / dysk).
     Katalog spoza listy (dawny tryb jednego katalogu, np. karty pamięci) → None = ogólne wytyczne."""
     try:
@@ -70,9 +83,12 @@ def category_for(catalog_id, title):
     except (TypeError, ValueError):
         return None
     if catalog_id in CATEGORY_OF_CATALOG:
-        return CATEGORY_OF_CATALOG[catalog_id]
+        category = CATEGORY_OF_CATALOG[catalog_id]
+        return category if not enabled or category in enabled else "skip"
     if catalog_id in MIXED_CATALOGS:
         for category in MIXED_CATALOGS[catalog_id]:
+            if enabled and category not in enabled:
+                continue
             if _TITLE_RULES[category].search(title or ""):
                 return category
         return "skip"

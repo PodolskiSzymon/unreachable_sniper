@@ -16,7 +16,7 @@ from pathlib import Path
 
 import httpx
 
-from .categories import CatalogSource, CatalogSpec, category_for, schedule
+from .categories import AI_ENABLED_NAMES, CatalogSource, CatalogSpec, category_for, schedule, wanted_specs
 from .config import CATALOG_ONLY_HEADERS, CATALOG_URL, SHIPPING_URL, SIDEBAR_URL, ScoutConfig, get_catalog_params
 from .dedup import RecentIds
 from .extractor import build_offer, inactive_reason, item_url, unwrap_sidebar
@@ -91,9 +91,25 @@ class Scout:
         self._last_heartbeat = time.monotonic()
 
     # ------------------------------------------------------------------ katalog
+    def active_specs(self):
+        """Katalogi do skanowania - bez tych, w których wszystkie kategorie są wyłączone (SNIPER_CATEGORIES)."""
+        specs = self.catalogs.get()
+        enabled = getattr(self.cfg, "categories", ())
+        unknown = [c for c in enabled if c not in AI_ENABLED_NAMES]
+        if unknown and not getattr(self, "_warned_categories", False):
+            self._warned_categories = True
+            log.warning("[SCOUT] Nieznane kategorie w SNIPER_CATEGORIES: %s (dozwolone: %s)", ", ".join(unknown),
+                        ", ".join(AI_ENABLED_NAMES))
+        chosen = wanted_specs(specs, enabled)
+        if not chosen:
+            log.warning("[SCOUT] SNIPER_CATEGORIES=%s wyłącza wszystkie katalogi - skanuję wszystkie.",
+                        ",".join(enabled))
+            return specs
+        return chosen
+
     def next_spec(self):
         if not self._cycle:
-            self._cycle = schedule(self.catalogs.get())
+            self._cycle = schedule(self.active_specs())
         return self._cycle.pop(0)
 
     async def poll_catalog(self, spec=None):
@@ -123,7 +139,7 @@ class Scout:
         self._stats["new"] += len(fresh)
         wanted = []
         for item in fresh:
-            category = category_for(spec.catalog_id, item.get("title"))
+            category = category_for(spec.catalog_id, item.get("title"), getattr(self.cfg, "categories", ()))
             if category == "skip":
                 # Katalog mieszany: nie karta / RAM / dysk - bez szczegółów (oszczędza proxy) i bez AI.
                 log.debug("[SCOUT] Pomijam %s - inna kategoria: %s", item["id"], item.get("title"))
@@ -230,7 +246,7 @@ class Scout:
 
     # ------------------------------------------------------------------ pętla
     async def run(self):
-        specs = self.catalogs.get()
+        specs = self.active_specs()
         log.info("=== ZWIADOWCA START | %s | %d ofert/skan, skan co %.0fs (katalogi po kolei) | proxy=%s ===",
                  "; ".join(f"{s.label}{f' ×{s.share}' if s.share > 1 else ''}" for s in specs),
                  self.cfg.per_page, self.cfg.poll_interval, "TAK" if self.cfg.proxy_url else "NIE")

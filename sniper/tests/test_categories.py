@@ -312,3 +312,21 @@ def test_missing_equipment_warning(monkeypatch):
     msg = build_deal_message({"title": "DDR5 32GB 6000", "total_price": 500, "category": "ram"},
                              {"score": 8}, "t")
     assert "⚠ BRAK SPRZĘTU" in msg["message"]
+
+
+def test_enabled_categories():
+    from sniper.categories import wanted_specs
+    specs = parse_catalogs(ANALYSIS_CATALOGS)
+    assert [s.catalog_id for s in wanted_specs(specs, ("laptop", "ram"))] == [3580, 3582, 3584]
+    assert len(wanted_specs(specs, ())) == 7
+    assert wanted_specs([CatalogSpec("3063")], ("phone",))[0].catalog_id == "3063"   # tryb jednego katalogu
+    assert category_for(3661, "iPhone", ("laptop",)) == "skip"
+    assert category_for(3582, "RTX 3060 + RAM DDR4 16GB", ("ram",)) == "ram"         # karta wyłączona → RAM
+    assert category_for(3582, "RTX 3060 12GB", ("ram", "storage")) == "skip"
+
+
+def test_scout_skips_disabled_catalogs():
+    cfg = ScoutConfig(category="3580", catalogs="3580:250-6100*1,3661:100-3600,3582:150-2700",
+                      categories=("phone", "gpu"))
+    scout = Scout(cfg, VintedSession(), EmailNotifier(SmtpConfig()))
+    assert sorted({scout.next_spec().catalog_id for _ in range(4)}) == [3582, 3661]

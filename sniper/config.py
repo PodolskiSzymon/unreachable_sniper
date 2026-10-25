@@ -433,6 +433,9 @@ class ScoutConfig:
     # Wiele katalogów naraz (sniper/categories.py): "auto" = z <SNIPER_GUIDES_DIR>/catalogs.json od analizatora,
     # lista "3580:250-6100, 3661:100-3600*2" (katalog:cena_od-cena_do*waga), puste = tylko SNIPER_CATALOG.
     catalogs: str = _env("SNIPER_CATALOGS")
+    # Które kategorie Sniper ocenia (laptop, phone, tablet, console, gpu, ram, storage); puste = wszystkie.
+    # Wyłączona kategoria = jej katalog nie jest skanowany (a w mieszanych - oferty bez pobierania szczegółów).
+    categories: tuple = _env_list("SNIPER_CATEGORIES")
     price_from: str = _env("SNIPER_PRICE_FROM", "100")   # minimalna cena w PLN (puste = bez filtra)
     price_to: str = _env("SNIPER_PRICE_TO")               # maksymalna cena w PLN (puste = bez filtra)
     # Ofert na jeden skan. svc-catalogue respektuje per_page (test check_per_page.py, 2026-10-02):
