@@ -287,9 +287,9 @@ def test_test_kits_in_push():
     assert test_kit("laptop").startswith("nic")
     assert "stanowisko A" in test_kit("gpu", "RTX 3060")
     assert "SO-DIMM→DIMM" in test_kit("ram", "Pamięć DDR4 SO-DIMM 16GB")
+    assert "płyta DDR4" in test_kit("ram", "Corsair DDR4 2x16GB")
     assert "DDR5 SO-DIMM" in test_kit("ram", "DDR5 SODIMM 32GB do laptopa")
     assert "stanowisko B" in test_kit("ram", "Kingston Fury DDR5 32GB")
-    assert "stanowisko A (DDR4)" in test_kit("ram", "Corsair DDR4 2x16GB")
     assert "NVMe" in test_kit("storage", "Samsung 980 Pro NVMe 1TB") and "SATA" in test_kit("storage", "SSD 2TB")
     assert test_kit(None) is None
     msg = build_deal_message({"title": "RTX 4080 Gigabyte", "total_price": 2500, "category": "gpu"},
@@ -297,3 +297,18 @@ def test_test_kits_in_push():
                               "test_needs": "zasilacz z 12V-2x6"}, "t")
     line = next(x for x in msg["message"].splitlines() if x.startswith("Do testu:"))
     assert "stanowisko A" in line and line.endswith("zasilacz z 12V-2x6")
+
+
+def test_missing_equipment_warning(monkeypatch):
+    from sniper.categories import test_kit, test_requirement
+    assert [test_requirement("ram", t) for t in ("DDR5 32GB", "DDR4 SO-DIMM 8GB", "DDR5 SODIMM 16GB", "RAM 16GB")] == \
+        ["ddr5", "sodimm_ddr4", "sodimm_ddr5", None]
+    monkeypatch.setenv("SNIPER_TEST_HAVE", "gpu, ddr4, sodimm_ddr4, nvme, sata")
+    assert test_kit("ram", "Kingston DDR4 16GB").startswith("✓ masz sprzęt")
+    assert test_kit("ram", "Kingston Fury DDR5 32GB") == \
+        "⚠ BRAK SPRZĘTU – do kupna potrzebujesz: płyta główna z DDR5 (np. H610M / B660M DDR5 + Pentium G7400)"
+    assert "laptop / mini PC z DDR5 SO-DIMM" in test_kit("ram", "DDR5 SO-DIMM 16GB")
+    assert test_kit("laptop").startswith("nic")                      # laptop / telefon - bez oznaczeń
+    msg = build_deal_message({"title": "DDR5 32GB 6000", "total_price": 500, "category": "ram"},
+                             {"score": 8}, "t")
+    assert "⚠ BRAK SPRZĘTU" in msg["message"]

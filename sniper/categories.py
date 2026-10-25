@@ -190,18 +190,61 @@ TEST_KITS = {
 }
 
 
+# Klucze sprzętu (SNIPER_TEST_HAVE w .env = co już masz, np. „gpu,ddr4,sodimm_ddr4,nvme,sata”) i co trzeba
+# dokupić, gdy go brak. Puste SNIPER_TEST_HAVE = bez oznaczeń ✓ / ⚠ (tylko opis sprzętu).
+EQUIPMENT_MISSING = {
+    "gpu": "stanowisko z PCIe x16 + zasilacz 850 W ATX 3.x",
+    "ddr4": "płyta główna z DDR4 (np. B250 / Z270 + i5-7400)",
+    "ddr5": "płyta główna z DDR5 (np. H610M / B660M DDR5 + Pentium G7400)",
+    "sodimm_ddr4": "przejściówka SO-DIMM→DIMM DDR4 (do płyty DDR4) albo mini PC z DDR4 SO-DIMM",
+    "sodimm_ddr5": "laptop / mini PC z DDR5 SO-DIMM (albo płyta DDR5 + przejściówka DDR5 SO-DIMM→DIMM)",
+    "nvme": "gniazdo M.2 na płycie albo obudowa M.2 NVMe → USB-C",
+    "sata": "przejściówka SATA → USB",
+}
+
+
+def test_requirement(category, title=""):
+    """Klucz potrzebnego sprzętu (EQUIPMENT_MISSING) albo None - laptop / telefon / tablet / konsola nic nie wymagają."""
+    text = (title or "").lower()
+    if category == "gpu":
+        return "gpu"
+    if category == "ram":
+        ddr5, ddr4 = "ddr5" in text, "ddr4" in text
+        laptop = bool(re.search(r"so-?dimm|sodimm|laptop|notebook", text))
+        if not (ddr4 or ddr5):
+            return None                  # typ nieznany z tytułu - AI dopisze w test_needs
+        return ("sodimm_" if laptop else "") + ("ddr5" if ddr5 else "ddr4")
+    if category == "storage":
+        return "nvme" if re.search(r"nvme|m\.2|m2\b|pcie", text) else "sata"
+    return None
+
+
+def _have():
+    import os
+    return {x.strip().lower() for x in os.getenv("SNIPER_TEST_HAVE", "").split(",") if x.strip()}
+
+
 def test_kit(category, title=""):
-    """Krótki opis sprzętu do testu (do powiadomienia) albo None."""
+    """Krótki opis sprzętu do testu (do powiadomienia) albo None. Z SNIPER_TEST_HAVE: „⚠ BRAK SPRZĘTU: …”, gdy
+    potrzebnego sprzętu nie masz, albo „✓ masz sprzęt” na początku."""
     text = (title or "").lower()
     if category == "ram":
         laptop = bool(re.search(r"so-?dimm|sodimm|laptop|notebook", text))
         ddr5 = "ddr5" in text
         if laptop:
-            return ("laptop / mini PC z DDR5 SO-DIMM (np. Twój laptop na sprzedaż); MemTest86" if ddr5 else
-                    "przejściówka SO-DIMM→DIMM na stanowisku A albo mini PC z DDR4 SO-DIMM; MemTest86")
-        return (BENCH_DDR5 if ddr5 else "stanowisko A (DDR4)") + "; MemTest86"
-    if category == "storage":
+            kit = ("laptop / mini PC z DDR5 SO-DIMM (np. Twój laptop na sprzedaż); MemTest86" if ddr5 else
+                   "przejściówka SO-DIMM→DIMM na płycie DDR4 albo mini PC z DDR4 SO-DIMM; MemTest86")
+        else:
+            kit = (BENCH_DDR5 if ddr5 else "płyta DDR4 (stanowisko A)") + "; MemTest86"
+    elif category == "storage":
         nvme = bool(re.search(r"nvme|m\.2|m2\b|pcie", text))
-        return ("obudowa / przejściówka M.2 NVMe → USB-C" if nvme else "przejściówka SATA → USB") + \
+        kit = ("gniazdo M.2 na płycie albo obudowa M.2 NVMe → USB-C" if nvme else "przejściówka SATA → USB") + \
             "; CrystalDiskInfo (stan, godziny, zapisane TB) + h2testw (prawdziwa pojemność)"
-    return TEST_KITS.get(category)
+    else:
+        kit = TEST_KITS.get(category)
+    need, have = test_requirement(category, title), _have()
+    if kit and need and have:
+        if need in have:
+            return "✓ masz sprzęt: " + kit
+        return f"⚠ BRAK SPRZĘTU – do kupna potrzebujesz: {EQUIPMENT_MISSING[need]}"
+    return kit
