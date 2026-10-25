@@ -249,6 +249,7 @@ def test_scout_rotates_catalogs_and_skips_other_parts():
     assert requests == [("3580", "250", "6100"), ("3582", "150", "2700")] * 2
     assert inspected == [(2, 3580, "laptop"), (21, 3582, "storage")]      # kabel pominięty bez detali
     assert scout._skipped == {"inna kategoria": 1}
+    assert {k.split()[0]: v for k, v in scout._per_catalog.items()} == {"3580": [2, 1, 1], "3582": [2, 2, 1]}   # rozgrzewka nie liczy nowych
     assert scout.seen.maxlen >= 200                         # pamięć ID na 2 katalogi
 
 

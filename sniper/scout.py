@@ -87,6 +87,7 @@ class Scout:
         self._first_batch = cfg.skip_initial_batch
         self._stats = {"polls": 0, "errors": 0, "new": 0, "caught": 0, "last_size": 0}
         self._skipped = {}        # powód -> liczba (od ostatniego heartbeatu)
+        self._per_catalog = {}    # katalog -> [skany, nowe, wysłane do oceny] (od ostatniego heartbeatu)
         self._top_items = []      # pierwsze oferty z ostatniego skanu, w kolejności Vinted
         self._last_heartbeat = time.monotonic()
 
@@ -122,6 +123,9 @@ class Scout:
         self._stats["polls"] += 1
         self._stats["last_size"] = len(items)
         self._top_items = items[:5]
+        self._top_label = spec.label
+        counts = self._per_catalog.setdefault(spec.label, [0, 0, 0])
+        counts[0] += 1
         if not items:
             log.warning("[SCOUT] Pusty katalog (klucze odpowiedzi: %s) - możliwy soft-ban. Odświeżam sesję.",
                         ", ".join(data) if isinstance(data, dict) else type(data).__name__)
@@ -137,6 +141,7 @@ class Scout:
             return
 
         self._stats["new"] += len(fresh)
+        counts[1] += len(fresh)
         wanted = []
         for item in fresh:
             category = category_for(spec.catalog_id, item.get("title"), getattr(self.cfg, "categories", ()))
@@ -146,6 +151,7 @@ class Scout:
                 self._skip("inna kategoria")
                 continue
             wanted.append(item)
+            counts[2] += 1
             self._spawn(self.inspect(item, spec, category))
         for it in wanted:
             log.info("[SCOUT] Nowe ogłoszenie %s | %s | %s | %s",
@@ -303,8 +309,13 @@ class Scout:
                  interval, s["polls"], s["errors"], s["new"], s["caught"], skipped,
                  self.notifier.summary() if hasattr(self.notifier, "summary") else self.notifier.sent,
                  self.notifier.failed, s["last_size"])
+        if self._per_catalog:
+            log.info("[SCOUT] Katalogi (skany / nowe / do oceny): %s", " | ".join(
+                f"{label.split(' ', 2)[0]} {label.split(' ', 2)[1]} {c[0]}/{c[1]}/{c[2]}"
+                for label, c in self._per_catalog.items()))
         if self._top_items:
-            log.info("[SCOUT] Pierwsze oferty w katalogu (kolejność Vinted):")
+            log.info("[SCOUT] Pierwsze oferty w ostatnio skanowanym katalogu %s (kolejność Vinted):",
+                     getattr(self, "_top_label", ""))
             for it in self._top_items:
                 log.info("    %s | %s | %s | %s", it.get("id"), it.get("title", "?"), _catalog_price(it),
                          item_url(it.get("id"), it))
@@ -318,6 +329,7 @@ class Scout:
         for key in ("polls", "errors", "new", "caught"):
             s[key] = 0
         self._skipped = {}
+        self._per_catalog = {}
         self._last_heartbeat = time.monotonic()
 
     async def shutdown(self):
