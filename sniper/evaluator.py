@@ -559,6 +559,9 @@ class OfferEvaluator:
         self._tasks = set()
         self.window = _Stats()
         self.total = _Stats()
+        self.today = _Stats()            # koszt bieżącej doby (SNIPER_AI_DAILY_LIMIT_USD)
+        self._today = time.strftime("%Y-%m-%d")
+        self._limit_hit = None           # data, dla której poszło powiadomienie o limicie
         default_in, default_out = MODEL_PRICES.get(cfg.model, (0.0, 0.0))
         self._price_in = cfg.price_in if cfg.price_in is not None else default_in
         self._price_out = cfg.price_out if cfg.price_out is not None else default_out
@@ -588,13 +591,46 @@ class OfferEvaluator:
             return False
 
     def _count(self, key, value=1):
+        self._roll_day()
         self.window[key] += value
         self.total[key] += value
+        self.today[key] += value
+
+    def _roll_day(self):
+        day = time.strftime("%Y-%m-%d")
+        if day != getattr(self, "_today", None):       # (testy tworzą obiekt bez __init__)
+            self._today, self.today = day, _Stats()
+
+    def over_daily_limit(self):
+        """Powód pominięcia przed AI, gdy szacowany koszt doby przekroczył SNIPER_AI_DAILY_LIMIT_USD, albo None."""
+        limit = getattr(self.cfg, "daily_limit_usd", 0) or 0
+        if not limit:
+            return None
+        self._roll_day()
+        cost = self.today.cost_usd(self._price_in, self._price_out)
+        if cost < limit:
+            return None
+        if getattr(self, "_limit_hit", None) != self._today:
+            self._limit_hit = self._today
+            log.warning("[AI] Dzienny limit AI: ~$%.2f >= $%g - do północy oferty bez oceny AI.", cost, limit)
+            push = getattr(self, "push", None)
+            if push is not None:
+                try:
+                    task = asyncio.get_running_loop().create_task(push.send({
+                        "topic": push.cfg.topic, "title": "Sniper: dzienny limit AI",
+                        "message": f"Koszt AI dziś ~${cost:.2f} (limit ${limit:g}). Do północy oferty bez oceny AI "
+                                   f"- podnieś SNIPER_AI_DAILY_LIMIT_USD, jeśli to za mało.",
+                        "priority": 3, "tags": ["warning"]}))
+                    self._tasks.add(task)
+                    task.add_done_callback(self._tasks.discard)
+                except Exception:
+                    log.exception("[PUSH] Błąd powiadomienia o limicie")
+        return f"dzienny limit AI ${limit:g} (dziś ~${cost:.2f})"
 
     # ------------------------------------------------------------------ wejście z Zwiadowcy
     def submit(self, offer):
         """Nieblokujące: filtr wstępny od razu, ocena AI w osobnym zadaniu."""
-        reason = prefilter(offer, self.cfg) or self.gate(offer)
+        reason = prefilter(offer, self.cfg) or self.gate(offer) or self.over_daily_limit()
         if reason:
             log.info("[AI] Pomijam %s przed AI: %s", offer.id, reason)
             self._count("filtered")
@@ -796,13 +832,16 @@ class OfferEvaluator:
     # ------------------------------------------------------------------ heartbeat i zamykanie
     def window_report(self):
         """Linia do heartbeatu Zwiadowcy; zeruje licznik okna."""
+        self._roll_day()
         w, t = self.window, self.total
         text = (f"AI: ocenione {w['evaluated']}, nieocenione {w['failed']}, odfiltrowane {w['filtered']}, "
                 f"maile {w['notified']}, w toku {len(self._tasks)} | wywołania {w['calls']}, tokeny we "
                 f"{w['input_tokens'] + w['cache_creation_input_tokens'] + w['cache_read_input_tokens']} "
                 f"(cache {w['cache_read_input_tokens']}) / wy {w['output_tokens']} | "
                 f"~${w.cost_usd(self._price_in, self._price_out):.3f} "
-                f"(od startu: {t['calls']} wywołań, ~${t.cost_usd(self._price_in, self._price_out):.2f})")
+                f"(od startu: {t['calls']} wywołań, ~${t.cost_usd(self._price_in, self._price_out):.2f}; dziś "
+                f"~${self.today.cost_usd(self._price_in, self._price_out):.2f}"
+                f"{f' z limitu ${self.cfg.daily_limit_usd:g}' if getattr(self.cfg, 'daily_limit_usd', 0) else ''})")
         self.window = _Stats()
         return text
 

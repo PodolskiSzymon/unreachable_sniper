@@ -243,6 +243,9 @@ class AiConfig:
     guidelines_file: str = _env("SNIPER_AI_GUIDELINES") or str(Path(__file__).with_name("guidelines.md"))
     # Wytyczne per kategoria z analizatora: <folder>/<kategoria>.md (+ catalogs.json z zakresami cen).
     guides_dir: str = _env("SNIPER_GUIDES_DIR") or str(Path(__file__).with_name("guides"))
+    # Dzienny limit kosztu AI w USD (szacunek z tokenów, doba wg zegara komputera). Po przekroczeniu oferty do końca
+    # doby pomijane przed AI + jedno powiadomienie push. 0 = bez limitu.
+    daily_limit_usd: float = _env_float("SNIPER_AI_DAILY_LIMIT_USD", 0.0)
     # Bramka ceny przed AI: cena łączna > max zakup pasującego wiersza tabeli × tyle → bez AI (0 = wyłączona).
     price_gate: float = _env_float("SNIPER_AI_PRICE_GATE", 1.25)
 

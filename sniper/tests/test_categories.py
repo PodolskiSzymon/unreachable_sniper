@@ -246,3 +246,33 @@ def test_scout_rotates_catalogs_and_skips_other_parts():
     assert inspected == [(2, 3580, "laptop"), (21, 3582, "storage")]      # kabel pominięty bez detali
     assert scout._skipped == {"inna kategoria": 1}
     assert scout.seen.maxlen >= 200                         # pamięć ID na 2 katalogi
+
+
+def test_gate_without_capacity_uses_highest_variant(tmp_path):
+    book = GuideBook(guides(tmp_path), tmp_path / "brak.md")
+    (tmp_path / "guides" / "phone.md").write_text(PHONE_GUIDE + "| iPhone 13 256 GB | 50 | 1 | 1 | 1 | 1 / 1 | 1 (1) | "
+                                                  "1 500 | 900 | 1 / 1% | 0% |\n", encoding="utf-8")
+    assert book.gate("phone", "iPhone 13 stan bdb", 1100.0, 1.25) is None            # 1100 ≤ 900 × 1,25
+    reason = book.gate("phone", "iPhone 13 stan bdb", 1200.0, 1.25)
+    assert "max zakup 900" in reason and "2 wariantów" in reason
+    assert book.gate("phone", "iPhone 13 Pro", 5000.0, 1.25) is not None             # Pro ma własny wiersz
+    assert book.gate("phone", "iPhone 13 Pro Max", 5000.0, 1.25) is None             # brak wiersza → AI
+
+
+def test_daily_ai_limit(tmp_path):
+    client = FakeClient(response())
+    evaluator = OfferEvaluator(ai_cfg(tmp_path, daily_limit_usd=0.001), FakeNotifier(), log_dir=tmp_path,
+                               client=client)
+
+    async def scenario():
+        evaluator.submit(laptop())
+        await asyncio.gather(*evaluator._tasks)
+        evaluator.submit(laptop(id=7002))                 # pierwsze wywołanie przekroczyło $0,001
+        await asyncio.gather(*evaluator._tasks)
+
+    run(scenario())
+    assert len(client.calls) == 1
+    last = json.loads((tmp_path / "evaluations.jsonl").read_text(encoding="utf-8").splitlines()[-1])
+    assert last["status"] == STATUS_FILTERED and last["prefilter_reason"].startswith("dzienny limit AI $0.001")
+    evaluator.today = type(evaluator.today)()            # nowa doba
+    assert evaluator.over_daily_limit() is None

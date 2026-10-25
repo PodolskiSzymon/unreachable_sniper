@@ -62,6 +62,13 @@ class Row:
             return []
         return [t for t in tokens(self.name) if t not in _NOISE]
 
+    @property
+    def core_words(self):
+        """Słowa bez pojemności (128 GB, 1 TB) - do luźnego dopasowania, gdy tytuł nie podaje pamięci."""
+        raw = tokens(self.name)
+        sizes = {i for i, t in enumerate(raw[:-1]) if t.isdigit() and raw[i + 1] in ("gb", "tb")}
+        return [t for i, t in enumerate(raw) if i not in sizes and t not in _NOISE] if self.words else []
+
 
 def parse_rows(text):
     """Wiersze tabeli cen z pliku analizatora (kolumny po nagłówku: grupa … sprzedam za ~ … max zakup …)."""
@@ -85,13 +92,14 @@ def parse_rows(text):
     return rows
 
 
-def match(rows, title, category=None):
-    """Pasujące wiersze, od najbardziej szczegółowego."""
+def match(rows, title, category=None, relaxed=False):
+    """Pasujące wiersze, od najbardziej szczegółowego. relaxed - bez wymogu pojemności (iPhone 13 bez „128 GB”
+    pasuje do każdego iPhone 13 … GB, ale nie do iPhone 13 Pro)."""
     words = set(tokens(title))
     variants = VARIANT_WORDS.get(category, _MODEL_VARIANTS | _GPU_VARIANTS)
     found = []
     for row in rows:
-        need = row.words
+        need = row.core_words if relaxed else row.words
         if not need or not set(need) <= words:
             continue
         if (words & variants) - set(tokens(row.name)):
@@ -148,9 +156,9 @@ class GuideBook:
     def text(self, category):
         return self._file(category).text
 
-    def match(self, category, title):
+    def match(self, category, title, relaxed=False):
         try:
-            return match(self._file(category).rows, title, category)
+            return match(self._file(category).rows, title, category, relaxed)
         except OSError:
             return []
 
@@ -159,9 +167,15 @@ class GuideBook:
         if not factor or price is None:
             return None
         rows = [r for r in self.match(category, title) if r.max_buy]
-        if not rows:
-            return None
-        best = rows[0]
-        if price > best.max_buy * factor:
-            return f"za drogo wg tabeli: {price:.0f} zł > max zakup {best.max_buy:.0f} zł × {factor:g} ({best.name})"
+        if rows:
+            limit, name = rows[0].max_buy, rows[0].name
+        else:
+            # Tytuł bez pojemności: próg NAJWYŻSZY spośród wariantów pamięci (na pewno nie odrzucimy okazji).
+            rows = [r for r in self.match(category, title, relaxed=True) if r.max_buy]
+            if not rows:
+                return None
+            best = max(rows, key=lambda r: r.max_buy)
+            limit, name = best.max_buy, f"{best.name}, najwyższy z {len(rows)} wariantów"
+        if price > limit * factor:
+            return f"za drogo wg tabeli: {price:.0f} zł > max zakup {limit:.0f} zł × {factor:g} ({name})"
         return None
