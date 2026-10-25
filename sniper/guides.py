@@ -27,9 +27,16 @@ VARIANT_WORDS = {"laptop": _GPU_VARIANTS, "gpu": _GPU_VARIANTS, "ram": set(), "s
 _NOISE = {"gb", "tb", "ram", "zintegrowana", "grafika", "laptop", "pc", "intel", "core", "amd", "ryzen", "apple"}
 
 
+# Skróty z tytułów → nazwy jak w tabelach analizatora („PS5 Slim” → playstation 5 slim).
+_ALIASES = ((re.compile(r"\bps\s?([345])\b"), r"playstation \1"),)
+
+
 def tokens(text):
     """'iPhone13 Pro 128GB' → ['iphone', '13', 'pro', '128', 'gb'] (litery i cyfry rozdzielone)."""
-    text = re.sub(r"(?<=[a-ząćęłńóśźż])(?=\d)|(?<=\d)(?=[a-ząćęłńóśźż])", " ", (text or "").lower())
+    text = (text or "").lower()
+    for pattern, repl in _ALIASES:
+        text = pattern.sub(repl, text)
+    text = re.sub(r"(?<=[a-ząćęłńóśźż])(?=\d)|(?<=\d)(?=[a-ząćęłńóśźż])", " ", text)
     return re.findall(r"[a-ząćęłńóśźż]+|\d+", text)
 
 

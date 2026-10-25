@@ -109,6 +109,7 @@ def test_catalog_params_use_spec():
 # ----------------------------------------------------------------------------- wytyczne i bramka
 def test_tokens_and_rows():
     assert tokens("iPhone13 Pro 128GB") == ["iphone", "13", "pro", "128", "gb"]
+    assert tokens("PS5 Slim") == tokens("ps 5 slim") == ["playstation", "5", "slim"]
     rows = parse_rows(PHONE_GUIDE)
     assert [(r.name, r.sale, r.max_buy) for r in rows] == [
         ("iPhone 13 128 GB", 1300.0, 754.0), ("iPhone 13 Pro 128 GB", 1850.0, 1104.0),
