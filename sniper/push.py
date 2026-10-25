@@ -15,7 +15,7 @@ import logging
 
 import httpx
 
-from .categories import CATEGORY_NAMES
+from .categories import CATEGORY_NAMES, test_kit
 
 log = logging.getLogger("sniper.push")
 
@@ -40,6 +40,10 @@ def build_deal_message(offer, evaluation, topic, priority=5, attach_photo=True):
                      f"{_pln(ev.get('potential_profit_pln'))}{margin}{days}")
         if ev.get("market_value_pln") is not None:
             lines.append(f"Sprzedam za ~{_pln(ev.get('market_value_pln'))}")
+    kit = test_kit(offer.get("category"), offer.get("title"))
+    extra = (ev.get("test_needs") or "").strip()
+    if kit or extra:
+        lines.append("Do testu: " + "; ".join(x for x in (kit, extra) if x))
     parts = [p for p in (ev.get("gpu_model"), ev.get("laptop_model")) if p]
     if parts:
         lines.append(" / ".join(parts))

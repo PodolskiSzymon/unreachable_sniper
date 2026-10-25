@@ -66,6 +66,9 @@ EVALUATION_SCHEMA = {
         "sell_days_estimate": _nullable("integer", "Szacowane dni do sprzedaży po tej cenie."),
         "meets_profit_rule": {"type": "boolean", "description": "Czy zysk i marża spełniają regułę minimalnego zysku "
                               "z wytycznych (albo cena łączna ≤ max zakup)."},
+        "test_needs": {"type": "string", "description": "Co szczególnego potrzeba do sprawdzenia TEJ sztuki ponad "
+                       "zwykły zestaw (np. 'zasilacz z 12V-2x6 / 3x 8-pin', 'DDR5 SO-DIMM', 'pad - brak w zestawie'); "
+                       "pusty tekst, gdy nic."},
         "photos_seen": {"type": "integer", "description": "Ile zdjęć z ogłoszenia faktycznie widzisz (0 = żadnego)."},
         "photo_notes": {"type": "string", "description": "1-2 zdania: co konkretnie widać na zdjęciach (stan, "
                         "naklejki, ekran, uszkodzenia); pusty tekst, gdy nie widzisz zdjęć."},
@@ -73,7 +76,7 @@ EVALUATION_SCHEMA = {
         "red_flags": {"type": "array", "items": {"type": "string"}, "description": "Czerwone flagi (pusta lista = brak)."},
     },
     "required": ["is_deal", "score", "gpu_model", "laptop_model", "market_value_pln", "max_buy_price_pln",
-                 "potential_profit_pln", "margin_pct", "sell_days_estimate", "meets_profit_rule", "photos_seen",
+                 "potential_profit_pln", "margin_pct", "sell_days_estimate", "meets_profit_rule", "test_needs", "photos_seen",
                  "photo_notes", "reasoning", "red_flags"],
     "additionalProperties": False,
 }
@@ -112,6 +115,8 @@ Skala score (0-10):
 - 4-6: na granicy - zysk nieco poniżej reguły albo ważne niewiadome (np. nieznany model / pamięć).
 - 0-3: nie kupować - za drogo, poważne czerwone flagi, uszkodzony.
 is_deal = true tylko wtedy, gdy meets_profit_rule = true i nie ma czerwonych flag dyskwalifikujących zakup.
+Użytkownik NIE kupuje uszkodzonych: na części, blokada, zbity ekran, nie włącza się / nie działa, artefakty (karta) \
+→ is_deal = false i score ≤ 3, nawet przy bardzo niskiej cenie.
 
 reasoning: 2-4 zdania po polsku, konkretnie: co to jest (pasujący wiersz), cena łączna vs max zakup, szacowana \
 cena sprzedaży, zysk i marża, dni do sprzedaży, stan; korekty (np. kraj sprzedawcy), jeśli były.
@@ -268,6 +273,7 @@ def normalize_evaluation(text):
         "margin_pct": _num(data.get("margin_pct")),
         "sell_days_estimate": int(days) if days is not None else None,
         "meets_profit_rule": data.get("meets_profit_rule"),
+        "test_needs": str(data.get("test_needs") or ""),
         "photos_seen": int(_num(data.get("photos_seen")) or 0),
         "photo_notes": str(data.get("photo_notes") or ""),
         "reasoning": str(data.get("reasoning") or ""),

@@ -12,6 +12,8 @@ REGUŁA ZYSKU (decyzja użytkownika 2026-10-25, ta sama co w wytycznych z danych
   wysyłka ~20 zł; opłatę Vinted płaci kupujący). Marża = zysk / realna cena sprzedaży.
 - Minimalny zysk zależy od marży: ≥ 40% → 300 zł, 35% → 500 zł, 30% → 700 zł, 25% → 900 zł, 20% → 1 100 zł
   (+40 zł na każdy punkt marży poniżej 40%); marża < 20% → NIE kupujemy.
+- Tańsze laptopy: wystarczy też zysk ≥ 30% ceny sprzedaży (min. 150 zł) - rozstrzyga przy sprzedaży do ~2 300 zł.
+- Nie kupuję uszkodzonych (na części, blokada BIOS / konta, zbita matryca, nie włącza się) - nigdy okazja.
 - „Maksymalna cena zakupu” w tabeli niżej = najwyższa cena łączna, przy której reguła jest spełniona dla podanej
   ceny sprzedaży (policzona, nie zgadywana). „Zysk przy progu” = zysk przy zakupie dokładnie za próg.
 - Realna cena sprzedaży (market_value_pln) sztuki w dobrym stanie = „Cena sprzedaży do wzoru”, a gdy jej nie ma -
@@ -26,8 +28,8 @@ Karta spoza tabeli: oszacuj realną cenę sprzedaży i policz próg regułą zys
 
 1. RTX 3050 / 3050 Ti
 - Szacowana cena sprzedaży: 1800 - 2200 zł
-- Zysk przy progu: ~590 zł
-- Maksymalna cena zakupu: 1164 zł
+- Zysk przy progu: ~540 zł
+- Maksymalna cena zakupu: 1214 zł
 - Notatki: Bardzo niska rentowność. Rynkowo na OLX wiszą za ok. 1570 zł. Kupować tylko przy skrajnych okazjach.
 
 2. RTX 4050

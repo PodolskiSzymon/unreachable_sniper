@@ -280,3 +280,20 @@ def test_daily_ai_limit(tmp_path):
     assert last["status"] == STATUS_FILTERED and last["prefilter_reason"].startswith("dzienny limit AI $0.001")
     evaluator.today = type(evaluator.today)()            # nowa doba
     assert evaluator.over_daily_limit() is None
+
+
+def test_test_kits_in_push():
+    from sniper.categories import test_kit
+    assert test_kit("laptop").startswith("nic")
+    assert "stanowisko A" in test_kit("gpu", "RTX 3060")
+    assert "SO-DIMM→DIMM" in test_kit("ram", "Pamięć DDR4 SO-DIMM 16GB")
+    assert "DDR5 SO-DIMM" in test_kit("ram", "DDR5 SODIMM 32GB do laptopa")
+    assert "stanowisko B" in test_kit("ram", "Kingston Fury DDR5 32GB")
+    assert "stanowisko A (DDR4)" in test_kit("ram", "Corsair DDR4 2x16GB")
+    assert "NVMe" in test_kit("storage", "Samsung 980 Pro NVMe 1TB") and "SATA" in test_kit("storage", "SSD 2TB")
+    assert test_kit(None) is None
+    msg = build_deal_message({"title": "RTX 4080 Gigabyte", "total_price": 2500, "category": "gpu"},
+                             {"score": 8, "max_buy_price_pln": 2700, "potential_profit_pln": 900,
+                              "test_needs": "zasilacz z 12V-2x6"}, "t")
+    line = next(x for x in msg["message"].splitlines() if x.startswith("Do testu:"))
+    assert "stanowisko A" in line and line.endswith("zasilacz z 12V-2x6")

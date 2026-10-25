@@ -15,6 +15,8 @@ from html import escape
 
 import aiosmtplib
 
+from .categories import test_kit
+
 log = logging.getLogger("sniper.notifier")
 
 PROFILE_URL = "https://www.vinted.pl/member/{seller_id}"
@@ -83,6 +85,9 @@ def ai_lines(ai):
         ("Potencjalny zysk", _pln(ev.get("potential_profit_pln"))
          + (f" (marża {ev['margin_pct']:.0f}%)" if isinstance(ev.get("margin_pct"), (int, float)) else "")),
         ("Sprzedaż", f"~{ev['sell_days_estimate']} dni" if ev.get("sell_days_estimate") is not None else "?"),
+        ("Do testu", "; ".join(x for x in (test_kit((ai.get("offer") or {}).get("category"),
+                                                    (ai.get("offer") or {}).get("title")),
+                                           ev.get("test_needs")) if x) or "-"),
         ("Uzasadnienie", ev.get("reasoning") or "-"),
         ("Zdjęcia (AI)", f"widzi {ev.get('photos_seen', '?')} z {ai.get('photos_sent', '?')}"
                          + (f": {ev['photo_notes']}" if ev.get("photo_notes") else "")),

@@ -174,3 +174,34 @@ class CatalogSource:
                     or [self.single]
             return self._specs
         return [self.single]
+
+
+# Czym sprawdzić kupioną rzecz (2026-10-25, prośba użytkownika: w powiadomieniu o okazji „czego potrzebuję”).
+# Pełna lista z cenami i programami: analyse_data/SPRZET_DO_TESTOW.md. Uszkodzonych nie kupujemy - laptop / telefon /
+# tablet sprawdza się sam (włącz, ekran, porty, bateria).
+BENCH_GPU = "stanowisko A (AM4: B450 + Ryzen 5 3600 + DDR4 + zasilacz 850 W ATX 3.x + SSD z Windows)"
+BENCH_DDR5 = "stanowisko B (LGA1700 DDR5: B660/B760 + Pentium G7400, zasilacz i SSD ze stanowiska A)"
+TEST_KITS = {
+    "laptop": "nic - włącz, ekran, klawiatura, porty, bateria (ładowarka w zestawie?)",
+    "phone": "nic - ładowarka / kabel; sprawdź blokady (iCloud / Google), baterię, aparat",
+    "tablet": "nic - ładowarka / kabel; sprawdź blokady (iCloud / Google), baterię",
+    "console": "telewizor / monitor HDMI + pad (jeśli nie ma w zestawie)",
+    "gpu": BENCH_GPU + "; GPU-Z, FurMark / OCCT 30 min",
+}
+
+
+def test_kit(category, title=""):
+    """Krótki opis sprzętu do testu (do powiadomienia) albo None."""
+    text = (title or "").lower()
+    if category == "ram":
+        laptop = bool(re.search(r"so-?dimm|sodimm|laptop|notebook", text))
+        ddr5 = "ddr5" in text
+        if laptop:
+            return ("laptop / mini PC z DDR5 SO-DIMM (np. Twój laptop na sprzedaż); MemTest86" if ddr5 else
+                    "przejściówka SO-DIMM→DIMM na stanowisku A albo mini PC z DDR4 SO-DIMM; MemTest86")
+        return (BENCH_DDR5 if ddr5 else "stanowisko A (DDR4)") + "; MemTest86"
+    if category == "storage":
+        nvme = bool(re.search(r"nvme|m\.2|m2\b|pcie", text))
+        return ("obudowa / przejściówka M.2 NVMe → USB-C" if nvme else "przejściówka SATA → USB") + \
+            "; CrystalDiskInfo (stan, godziny, zapisane TB) + h2testw (prawdziwa pojemność)"
+    return TEST_KITS.get(category)
