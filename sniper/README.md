@@ -79,14 +79,17 @@ python -m pytest sniper/tests
 Każda złapana oferta przechodzi przez:
 
 1. **Filtr wstępny** (zero kosztów): cena łączna `SNIPER_AI_PRICE_MIN/MAX`, słowa kluczowe `SNIPER_AI_KEYWORDS`
-   (domyślnie `rtx` i numery kart) i wykluczające `SNIPER_AI_EXCLUDE_KEYWORDS` – w tytule albo tytule + opisie.
+   i wykluczające `SNIPER_AI_EXCLUDE_KEYWORDS` – w tytule albo tytule + opisie (ogólne = tylko laptopy; inne
+   kategorie: `SNIPER_AI_KEYWORDS_PHONE`, `SNIPER_AI_EXCLUDE_KEYWORDS_CONSOLE` itd.), potem **bramka ceny**:
+   cena łączna > „max zakup” pasującego wiersza tabeli wytycznych × `SNIPER_AI_PRICE_GATE` (1,25) → bez AI.
 2. **Model AI** – `SNIPER_AI_PROVIDER=gemini` (domyślnie `gemini-3.8-flash`, klucz z Google AI Studio) albo
    `anthropic` (`claude-opus-5-5`); wywołanie bezpośrednio z komputera – nie przez IPRoyal:
    tytuł, cena, wysyłka, suma, stan, marka, opis, sprzedawca + do `SNIPER_AI_MAX_PHOTOS` zdjęć jako URL-e
    (pobiera je dostawca AI; dla Gemini `SNIPER_AI_PHOTOS=download` = Sniper pobiera je sam z domowego IP).
    Wynik to JSON wg schematu:
    `is_deal, score 0-10, gpu_model, laptop_model, market_value_pln, max_buy_price_pln, potential_profit_pln,
-   reasoning, red_flags`.
+   margin_pct, sell_days_estimate, meets_profit_rule, reasoning, red_flags`. W zapytaniu jest też „karta rynku” –
+   wiersze tabeli dopasowane lokalnie po tytule.
 3. **Mail**: tylko gdy `score >= SNIPER_AI_MIN_SCORE` (domyślnie 7), z oceną i uzasadnieniem na górze.
    Błąd AI (limit czasu, 5xx, zły klucz…) = mail „NIEOCENIONA” – oferta nie ginie. `SNIPER_AI_NOTIFY_ALL=true` =
    mail o każdej ofercie (z oceną). Bez klucza API moduł się wyłącza i jest mail o każdej ofercie, jak dawniej.
@@ -95,7 +98,10 @@ Ocena działa w osobnych zadaniach asyncio: limit `SNIPER_AI_MAX_CONCURRENT`, li
 `SNIPER_AI_RETRIES` ponowień (429/5xx/sieć/zły JSON) z rosnącą przerwą. Gdy API nie pobierze zdjęcia (400),
 ocena idzie jeszcze raz z samego tekstu.
 
-**Wytyczne**: `sniper/guidelines.md` (albo `SNIPER_AI_GUIDELINES`). Zmiana pliku działa od następnej oceny, bez restartu.
+**Wytyczne**: per kategoria `sniper/guides/<kategoria>.md` (laptop, phone, tablet, console, gpu, ram, storage –
+generuje je analizator rynku `analyse_data` i kopiuje tu 2× w tygodniu; reguła zysku: 40% marży → 300 zł … 20% → 1 100 zł).
+Laptopy bez `guides/laptop.md` i tryb jednego katalogu – `sniper/guidelines.md` (albo `SNIPER_AI_GUIDELINES`).
+Kategoria bez pliku wytycznych → oferta pominięta przed AI. Zmiana pliku działa od następnej oceny, bez restartu.
 
 **Sprawdzanie trafności**: każda oferta (także odfiltrowana) trafia do `sniper/logs/evaluations.csv`
 (średniki, otwiera się w Excelu: czas, status, ocena, okazja, mail, tytuł, ceny, karta, wartość, próg, zysk,
@@ -259,8 +265,13 @@ nigdy w repo ani w czacie. To tylko narzędzie diagnostyczne - przeglądarka kon
   Bez skonfigurowanego proxy Zwiadowca rzuca `ProxyNotConfigured` zamiast wyjść bezpośrednio
   (`SNIPER_REQUIRE_PROXY=true`, domyślnie). Pozostałe skrypty w repozytorium (`main*.py`, OLX,
   `low_important/` itd.) nie korzystają z proxy i działają z domowego IP.
-* **Filtry**: `SNIPER_CATALOG` (numer kategorii, np. `3580`; nazwa z `config.CATEGORIES` też działa, stare `SNIPER_CATEGORY` jako zapas),
-  `SNIPER_PRICE_FROM` / `SNIPER_PRICE_TO` (PLN, puste = bez limitu). Cena jest dodatkowo sprawdzana po pobraniu szczegółów.
+* **Filtry**: `SNIPER_CATALOGS=auto` – wiele katalogów z zakresami cen z `sniper/guides/catalogs.json` (analizator),
+  albo lista `3580:250-6100*3,3661:100-3600` (katalog:od-do*waga); skanowane po kolei (jeden skan co
+  `SNIPER_POLL_INTERVAL`, laptopy z wagą 3), rozgrzewka osobno dla każdego katalogu, w katalogach mieszanych
+  (3582/3583/3584) tylko karty / RAM / dyski po tytule – reszta bez pobierania szczegółów.
+  Puste `SNIPER_CATALOGS` = jak dawniej `SNIPER_CATALOG` (numer kategorii, np. `3580`; nazwa z `config.CATEGORIES` też
+  działa, stare `SNIPER_CATEGORY` jako zapas) z `SNIPER_PRICE_FROM` / `SNIPER_PRICE_TO` (PLN, puste = bez limitu).
+  Cena jest dodatkowo sprawdzana po pobraniu szczegółów.
 * **Playwright i proxy z hasłem**: przeglądarka łączy się z `127.0.0.1` (przekaźnik), a ten z IPRoyal z Twoim loginem i hasłem.
 * **Odświeżanie sesji**: `SNIPER_REFRESH_ATTEMPTS` prób (domyślnie 6) co `SNIPER_REFRESH_RETRY_DELAY` s (5),
   każda z limitem `SNIPER_REFRESH_TIMEOUT` s (90) i przez nowe IP; po nieudanej serii przerwa `SNIPER_REFRESH_BACKOFF` s (30)

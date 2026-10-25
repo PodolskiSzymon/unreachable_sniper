@@ -16,6 +16,7 @@ from pathlib import Path
 
 import httpx
 
+from .categories import CatalogSource, CatalogSpec, category_for, schedule
 from .config import CATALOG_ONLY_HEADERS, CATALOG_URL, SHIPPING_URL, SIDEBAR_URL, ScoutConfig, get_catalog_params
 from .dedup import RecentIds
 from .extractor import build_offer, inactive_reason, item_url, unwrap_sidebar
@@ -26,15 +27,16 @@ from .session import RateLimited, SessionExpired, VintedSession
 log = logging.getLogger("sniper.scout")
 
 
-def catalog_params(cfg):
-    """Strona 1, najnowsze - parametry 1:1 z działającego zapytania do svc-catalogue (patrz config.get_catalog_params)."""
+def catalog_params(cfg, spec=None):
+    """Strona 1, najnowsze - parametry 1:1 z działającego zapytania do svc-catalogue (patrz config.get_catalog_params).
+    spec (CatalogSpec) - katalog i zakres cen z SNIPER_CATALOGS; None = SNIPER_CATALOG / SNIPER_PRICE_FROM/TO."""
     return get_catalog_params(
-        category=cfg.category,
+        category=str(spec.catalog_id) if spec else cfg.category,
         page=1,
         order='newest_first',
         search_text=cfg.search_text,
-        price_from=cfg.price_from,
-        price_to=cfg.price_to,
+        price_from=spec.price_from if spec else cfg.price_from,
+        price_to=spec.price_to if spec else cfg.price_to,
         per_page=cfg.per_page,
     )
 
@@ -67,7 +69,13 @@ class Scout:
         self.evaluator = evaluator
         # AutoBuyer (sniper/autobuy.py) albo None - tu tylko do heartbeatu (okazje dostaje od evaluatora).
         self.buyer = buyer
-        floor = min_dedup(cfg.per_page)
+        single = CatalogSpec(cfg.catalog_id, cfg.price_from, cfg.price_to)
+        guides_dir = getattr(cfg.ai, "guides_dir", None)
+        self.catalogs = CatalogSource(cfg.catalogs, guides_dir, single)
+        self._cycle = []          # kolejka skanów bieżącego cyklu (categories.schedule)
+        self._warm = set()        # katalogi po rozgrzewce
+        # Wspólna pamięć ID dla wszystkich katalogów - 5 stron na katalog.
+        floor = min_dedup(cfg.per_page) * max(1, len(self.catalogs.get()))
         if cfg.dedup_size < floor:
             log.warning("[SCOUT] SNIPER_DEDUP_SIZE=%d to za mało przy stronie %d ofert - używam %d.",
                         cfg.dedup_size, cfg.per_page, floor)
@@ -83,9 +91,15 @@ class Scout:
         self._last_heartbeat = time.monotonic()
 
     # ------------------------------------------------------------------ katalog
-    async def poll_catalog(self):
+    def next_spec(self):
+        if not self._cycle:
+            self._cycle = schedule(self.catalogs.get())
+        return self._cycle.pop(0)
+
+    async def poll_catalog(self, spec=None):
+        spec = spec or self.next_spec()
         data = await self.session.get_json(
-            CATALOG_URL, params=catalog_params(self.cfg),
+            CATALOG_URL, params=catalog_params(self.cfg, spec),
             referer="https://www.vinted.pl/", extra_headers=CATALOG_ONLY_HEADERS,  # jak w cURL z przeglądarki
         )
         items = data.get("items") or []
@@ -101,15 +115,23 @@ class Scout:
         # Rosnąco po ID, żeby RecentIds wypychał najstarsze oferty jako pierwsze.
         fresh = [it for it in sorted(items, key=lambda it: it["id"]) if self.seen.add(it["id"])]
 
-        if self._first_batch:
-            self._first_batch = False
-            log.info("[SCOUT] Rozgrzewka: zapamiętano %d ofert bez alertów.", len(fresh))
+        if self._first_batch and spec.catalog_id not in self._warm:
+            self._warm.add(spec.catalog_id)
+            log.info("[SCOUT] Rozgrzewka %s: zapamiętano %d ofert bez alertów.", spec.label, len(fresh))
             return
 
         self._stats["new"] += len(fresh)
+        wanted = []
         for item in fresh:
-            self._spawn(self.inspect(item))
-        for it in fresh:
+            category = category_for(spec.catalog_id, item.get("title"))
+            if category == "skip":
+                # Katalog mieszany: nie karta / RAM / dysk - bez szczegółów (oszczędza proxy) i bez AI.
+                log.debug("[SCOUT] Pomijam %s - inna kategoria: %s", item["id"], item.get("title"))
+                self._skip("inna kategoria")
+                continue
+            wanted.append(item)
+            self._spawn(self.inspect(item, spec, category))
+        for it in wanted:
             log.info("[SCOUT] Nowe ogłoszenie %s | %s | %s | %s",
                      it["id"], it.get("title", "?"), _catalog_price(it), item_url(it["id"], it))
 
@@ -119,7 +141,7 @@ class Scout:
         task.add_done_callback(self._tasks.discard)
 
     # ------------------------------------------------------------------ detale
-    async def inspect(self, item):
+    async def inspect(self, item, spec=None, category=None):
         item_id = item["id"]
         referer = item_url(item_id, item)  # jak date_verification.get_sidebar_info: Referer = item['url']
 
@@ -146,12 +168,14 @@ class Scout:
             return
 
         offer = build_offer(item_id, sidebar, shipping, catalog_item=item)
+        offer.category = category
         # Druga linia obrony: gdyby API zignorowało filtr ceny, odsiewamy tutaj.
-        low, high = _to_float(self.cfg.price_from), _to_float(self.cfg.price_to)
+        price_from, price_to = (spec.price_from, spec.price_to) if spec else (self.cfg.price_from, self.cfg.price_to)
+        low, high = _to_float(price_from), _to_float(price_to)
         if offer.price is not None and ((low is not None and offer.price < low) or
                                         (high is not None and offer.price > high)):
             log.info("[SCOUT] Pomijam %s - cena %.2f poza zakresem %s-%s", item_id, offer.price,
-                     self.cfg.price_from or "0", self.cfg.price_to or "∞")
+                     price_from or "0", price_to or "∞")
             self._skip("cena poza zakresem")
             return
         self.emit(offer)
@@ -161,7 +185,8 @@ class Scout:
 
     def emit(self, offer):
         payload = offer.to_dict()
-        log.info("[ZŁAPANO] %s | %s %s | %s", offer.title, offer.price, offer.currency, offer.url)
+        log.info("[ZŁAPANO] %s%s | %s %s | %s", f"[{offer.category}] " if offer.category else "", offer.title,
+                 offer.price, offer.currency, offer.url)
         log.debug(json.dumps(payload, ensure_ascii=False))
 
         self._stats["caught"] += 1
@@ -205,8 +230,9 @@ class Scout:
 
     # ------------------------------------------------------------------ pętla
     async def run(self):
-        log.info("=== ZWIADOWCA START | katalog=%s | cena %s-%s PLN | %d ofert/skan co %.0fs | proxy=%s ===",
-                 self.cfg.catalog_id, self.cfg.price_from or "0", self.cfg.price_to or "∞",
+        specs = self.catalogs.get()
+        log.info("=== ZWIADOWCA START | %s | %d ofert/skan, skan co %.0fs (katalogi po kolei) | proxy=%s ===",
+                 "; ".join(f"{s.label}{f' ×{s.share}' if s.share > 1 else ''}" for s in specs),
                  self.cfg.per_page, self.cfg.poll_interval, "TAK" if self.cfg.proxy_url else "NIE")
         backoff = 0.0
         # Sesja z poprzedniego uruchomienia oszczędza wizytę przeglądarki; jeśli wygasła, pierwszy skan

@@ -98,7 +98,7 @@ def _card(record):
     flags = [f for f in (ev.get("red_flags") or []) if f]
     under = total is not None and max_buy is not None and total <= max_buy
     title = offer.get("title") or "?"
-    gpu = ev.get("gpu_model") or "karta nieznana"
+    gpu = ev.get("gpu_model") or ("" if ev.get("laptop_model") else "model nieznany")
     search = " ".join(str(x) for x in (title, gpu, ev.get("laptop_model") or "", seller.get("name") or "")).lower()
 
     img = (f'<a class="ph" href="{e(url)}" target="_blank" rel="noopener"><img loading="lazy" src="{e(photo)}" '
@@ -118,7 +118,7 @@ def _card(record):
       <span class="when">{e(_when(record.get('evaluated_at')))}</span>
     </div>
     <h2><a href="{e(url)}" target="_blank" rel="noopener">{e(title)}</a></h2>
-    <p class="spec">{e(gpu)}{(' · ' + e(ev['laptop_model'])) if ev.get('laptop_model') else ''}</p>
+    <p class="spec">{e(' · '.join(x for x in (offer.get('category'), gpu, ev.get('laptop_model')) if x))}</p>
     <dl class="money">
       <div><dt>Cena łączna</dt><dd class="{'under' if under else 'over' if max_buy is not None and total is not None else ''}">{_pln(total)}</dd></div>
       <div><dt>Maks. cena zakupu</dt><dd>{_pln(max_buy)}</dd></div>

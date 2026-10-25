@@ -76,11 +76,13 @@ def ai_lines(ai):
         return [("Błąd AI", f"{ai.get('error') or '?'} - oceń ofertę samodzielnie")]
     ev = ai["evaluation"]
     return [
-        ("Karta", ev.get("gpu_model") or "nie rozpoznano"),
-        ("Laptop", ev.get("laptop_model") or "?"),
+        ("Karta", ev.get("gpu_model") or "nie dotyczy / nie rozpoznano"),
+        ("Model", ev.get("laptop_model") or "?"),
         ("Wartość rynkowa", _pln(ev.get("market_value_pln"))),
         ("Maks. cena zakupu", _pln(ev.get("max_buy_price_pln"))),
-        ("Potencjalny zysk", _pln(ev.get("potential_profit_pln"))),
+        ("Potencjalny zysk", _pln(ev.get("potential_profit_pln"))
+         + (f" (marża {ev['margin_pct']:.0f}%)" if isinstance(ev.get("margin_pct"), (int, float)) else "")),
+        ("Sprzedaż", f"~{ev['sell_days_estimate']} dni" if ev.get("sell_days_estimate") is not None else "?"),
         ("Uzasadnienie", ev.get("reasoning") or "-"),
         ("Zdjęcia (AI)", f"widzi {ev.get('photos_seen', '?')} z {ai.get('photos_sent', '?')}"
                          + (f": {ev['photo_notes']}" if ev.get("photo_notes") else "")),

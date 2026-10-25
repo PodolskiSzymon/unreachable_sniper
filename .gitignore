@@ -13,3 +13,6 @@ sniper/logs/account_profile/
 # Profil przeglądarki bota (Patchright, SCRAPER_PROFILE_DIR) - ciasteczka sesji konta
 profiles/
 my_headers.txt
+
+# Wytyczne per kategoria i catalogs.json - generuje analizator rynku (analyse_data) na serwerze
+sniper/guides/

@@ -188,6 +188,15 @@ def _env_list(name, default=""):
     return tuple(part.strip().lower() for part in _env(name, default).split(",") if part.strip())
 
 
+# Nasze kategorie (sniper/categories.py) - do list słów per kategoria: SNIPER_AI_KEYWORDS_PHONE itd.
+AI_CATEGORIES = ("laptop", "phone", "tablet", "console", "gpu", "ram", "storage")
+
+
+def _env_category_lists(prefix):
+    """{kategoria: lista} z SNIPER_AI_..._<KATEGORIA> - tylko ustawione (puste = brak filtra słów)."""
+    return {cat: _env_list(f"{prefix}_{cat.upper()}") for cat in AI_CATEGORIES if os.getenv(f"{prefix}_{cat.upper()}")}
+
+
 DEFAULT_AI_KEYWORDS = ("rtx,3050,3060,3070,3080,4050,4060,4070,4080,4090,"
                        "5050,5060,5070,5080,5090")
 
@@ -232,6 +241,10 @@ class AiConfig:
     # i wysyłamy w zapytaniu.
     photos: str = _env("SNIPER_AI_PHOTOS", "url").lower()
     guidelines_file: str = _env("SNIPER_AI_GUIDELINES") or str(Path(__file__).with_name("guidelines.md"))
+    # Wytyczne per kategoria z analizatora: <folder>/<kategoria>.md (+ catalogs.json z zakresami cen).
+    guides_dir: str = _env("SNIPER_GUIDES_DIR") or str(Path(__file__).with_name("guides"))
+    # Bramka ceny przed AI: cena łączna > max zakup pasującego wiersza tabeli × tyle → bez AI (0 = wyłączona).
+    price_gate: float = _env_float("SNIPER_AI_PRICE_GATE", 1.25)
 
     # Mail tylko gdy ocena >= min_score; notify_all=true -> mail o każdej ofercie (z oceną albo bez).
     min_score: float = _env_float("SNIPER_AI_MIN_SCORE", 7.0)
@@ -253,6 +266,10 @@ class AiConfig:
     price_max: float | None = _env_float("SNIPER_AI_PRICE_MAX", None)
     keywords: tuple = _env_list("SNIPER_AI_KEYWORDS", DEFAULT_AI_KEYWORDS)
     exclude_keywords: tuple = _env_list("SNIPER_AI_EXCLUDE_KEYWORDS")
+    # Per kategoria: SNIPER_AI_KEYWORDS_PHONE, SNIPER_AI_EXCLUDE_KEYWORDS_LAPTOP itd. Ogólne SNIPER_AI_KEYWORDS /
+    # SNIPER_AI_EXCLUDE_KEYWORDS / SNIPER_AI_PRICE_MIN/MAX dotyczą tylko laptopów (i trybu jednego katalogu).
+    category_keywords: dict = field(default_factory=lambda: _env_category_lists("SNIPER_AI_KEYWORDS"))
+    category_exclude: dict = field(default_factory=lambda: _env_category_lists("SNIPER_AI_EXCLUDE_KEYWORDS"))
     # Gdzie szukać słów kluczowych: "title" albo "title+description".
     keywords_in: str = _env("SNIPER_AI_KEYWORDS_IN", "title+description").lower()
 
@@ -264,6 +281,13 @@ class AiConfig:
     @property
     def active(self):
         return self.enabled and bool(self.api_key)
+
+    def filters_for(self, category):
+        """(słowa kluczowe, wykluczające, cena min, cena max) dla kategorii oferty."""
+        legacy = category in (None, "laptop")
+        keywords = self.category_keywords.get(category, self.keywords if legacy else ())
+        exclude = self.category_exclude.get(category, self.exclude_keywords if legacy else ())
+        return keywords, exclude, (self.price_min if legacy else None), (self.price_max if legacy else None)
 
 
 # USD za 1M tokenów (wejście, wyjście). Gemini 3.x Flash: cena promocyjna do 31.12.2026,
@@ -403,6 +427,9 @@ class ScoutConfig:
     # SNIPER_CATALOG ma pierwszeństwo, SNIPER_CATEGORY zostaje dla zgodności.
     category: str = _env("SNIPER_CATALOG") or _env("SNIPER_CATEGORY", "karty_pamieci")
     search_text: str = _env("SNIPER_SEARCH_TEXT")
+    # Wiele katalogów naraz (sniper/categories.py): "auto" = z <SNIPER_GUIDES_DIR>/catalogs.json od analizatora,
+    # lista "3580:250-6100, 3661:100-3600*2" (katalog:cena_od-cena_do*waga), puste = tylko SNIPER_CATALOG.
+    catalogs: str = _env("SNIPER_CATALOGS")
     price_from: str = _env("SNIPER_PRICE_FROM", "100")   # minimalna cena w PLN (puste = bez filtra)
     price_to: str = _env("SNIPER_PRICE_TO")               # maksymalna cena w PLN (puste = bez filtra)
     # Ofert na jeden skan. svc-catalogue respektuje per_page (test check_per_page.py, 2026-10-02):

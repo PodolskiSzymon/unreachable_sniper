@@ -45,7 +45,8 @@ def ai_cfg(tmp_path, **kw):
                     max_tokens=8000, max_photos=6, guidelines_file=str(guidelines), min_score=7.0,
                     notify_all=False, max_concurrent=2, timeout=5.0, retries=2, retry_delay=0.0,
                     price_min=None, price_max=9000.0, keywords=("rtx", "4060"), exclude_keywords=(),
-                    keywords_in="title+description")
+                    keywords_in="title+description", guides_dir=str(tmp_path / "guides"), price_gate=1.25,
+                    category_keywords={}, category_exclude={})
     return replace(base, **kw)
 
 
@@ -193,7 +194,10 @@ def test_real_sdk_request_goes_direct_without_proxy(tmp_path, monkeypatch):
     assert record["status"] == STATUS_EVALUATED and record["evaluation"]["score"] == 8
     assert seen["url"].startswith("https://api.anthropic.com/v1/messages")
     assert FALLBACK_BETA in seen["headers"]["anthropic-beta"]
-    assert seen["headers"]["x-api-key"] == "sk-test" and "proxy-authorization" not in seen["headers"]
+    # anthropic 1.x: x-api-key, 2.x: authorization: Bearer - klucz musi dojść jednym z nich.
+    h = seen["headers"]
+    assert h.get("x-api-key") == "sk-test" or h.get("authorization") == "Bearer sk-test"
+    assert "proxy-authorization" not in h
     body = seen["body"]
     assert body["model"] == "claude-opus-5-5" and body["fallbacks"] == "default"
     assert body["output_config"]["format"]["type"] == "json_schema"

@@ -1,0 +1,176 @@
+"""Wiele kategorii naraz (D5, 2026-10-25): katalogi Vinted, zakresy cen z analizy rynku i nasza kategoria oferty.
+
+`SNIPER_CATALOGS` (sniper/.env):
+  * `auto` - katalogi i zakresy cen z `<SNIPER_GUIDES_DIR>/catalogs.json`, który generuje analizator
+    (`python -m analyzer sniper-guide` / automat 2× w tygodniu; zmiana pliku działa bez restartu),
+  * lista `3580:250-6100*3, 3661:100-3600, 3582` - katalog[:cena_od-cena_do][*waga] (bez zakresu =
+    SNIPER_PRICE_FROM/TO; waga = ile razy częściej skanowany niż katalog z wagą 1, domyślnie laptopy 3, reszta 1),
+  * puste - jak dawniej: jeden katalog `SNIPER_CATALOG` z `SNIPER_PRICE_FROM` / `SNIPER_PRICE_TO`.
+
+Nasza kategoria (do wyboru wytycznych `guides/<kategoria>.md`): katalogi „czyste” wprost (laptop, phone, tablet,
+console); w mieszanych (podzespoły 3582, nośniki 3583, akcesoria 3584) - z tytułu: karta graficzna / RAM / dysk,
+a reszta (wentylatory, kable, pendrive'y…) jest pomijana BEZ pobierania szczegółów i bez AI.
+"""
+import json
+import logging
+import re
+from dataclasses import dataclass
+from pathlib import Path
+
+log = logging.getLogger("sniper.categories")
+
+CATEGORY_OF_CATALOG = {3580: "laptop", 3661: "phone", 3728: "tablet", 3025: "console"}
+# Katalogi mieszane → jakie nasze kategorie mogą w nich być (kolejność = pierwszeństwo dopasowania tytułu).
+MIXED_CATALOGS = {3582: ("gpu", "storage", "ram"), 3583: ("storage",), 3584: ("ram", "storage", "gpu")}
+CATEGORY_NAMES = {"laptop": "laptopy", "phone": "telefony", "tablet": "tablety", "console": "konsole",
+                  "gpu": "karty graficzne", "ram": "pamięci RAM", "storage": "dyski SSD"}
+
+# Zakresy z analizy rynku 2026-10-25 (od = 60% najniższego „max zakup” grupy z realną okazją, do = najwyższy
+# „max zakup”) - używane w `.env.example`; aktualne liczy analizator do catalogs.json.
+ANALYSIS_CATALOGS = "3580:250-6100,3661:100-3600,3728:100-3200,3025:100-4400,3582:150-2700,3583:300-1400,3584:150-2700"
+# Katalogi skanowane są po kolei (jeden skan co SNIPER_POLL_INTERVAL - transfer proxy jak przy jednym katalogu);
+# laptopy (największe zyski, najszybciej znikają) domyślnie co 3. skan.
+DEFAULT_WEIGHTS = {3580: 3}
+
+_TITLE_RULES = {
+    "gpu": re.compile(r"\b(?:rtx|gtx|geforce|radeon|quadro|rx\s?\d{3,4}|arc\s?a\d{3}|karta graficzna|"
+                      r"graphics card|grafikkarte|placa video|videok[aá]rtya)\b", re.I),
+    "ram": re.compile(r"\b(?:ram|ddr[2-5]|so-?dimm|dimm|pami[eę][cć] operacyjna)\b", re.I),
+    "storage": re.compile(r"\b(?:ssd|nvme|m\.2|dysk|disk|hdd|festplatte)\b", re.I),
+}
+
+
+@dataclass(frozen=True)
+class CatalogSpec:
+    catalog_id: int
+    price_from: str = ""
+    price_to: str = ""
+    weight: int = 0                                  # 0 = domyślna (DEFAULT_WEIGHTS, inaczej 1)
+
+    @property
+    def share(self):
+        return max(1, self.weight or DEFAULT_WEIGHTS.get(self.catalog_id, 1))
+
+    @property
+    def label(self):
+        try:
+            cid = int(self.catalog_id)
+        except (TypeError, ValueError):
+            cid = None
+        cats = [CATEGORY_OF_CATALOG[cid]] if cid in CATEGORY_OF_CATALOG else list(MIXED_CATALOGS.get(cid, ()))
+        names = "/".join(CATEGORY_NAMES.get(c, c) for c in cats) or "katalog"
+        return f"{self.catalog_id} ({names}) {self.price_from or '0'}-{self.price_to or '∞'} zł"
+
+
+def category_for(catalog_id, title):
+    """Nasza kategoria oferty albo None (pomiń: w katalogu mieszanym to nie karta / RAM / dysk).
+    Katalog spoza listy (dawny tryb jednego katalogu, np. karty pamięci) → None = ogólne wytyczne."""
+    try:
+        catalog_id = int(catalog_id)
+    except (TypeError, ValueError):
+        return None
+    if catalog_id in CATEGORY_OF_CATALOG:
+        return CATEGORY_OF_CATALOG[catalog_id]
+    if catalog_id in MIXED_CATALOGS:
+        for category in MIXED_CATALOGS[catalog_id]:
+            if _TITLE_RULES[category].search(title or ""):
+                return category
+        return "skip"
+    return None
+
+
+def _price(value):
+    if value in (None, ""):
+        return ""
+    value = float(value)
+    return str(int(value)) if value == int(value) else str(value)
+
+
+def parse_catalogs(text, default_from="", default_to=""):
+    """'3580:250-6100, 3661, 3582:150-2700' → [CatalogSpec]. Błędny wpis - pomijany z ostrzeżeniem."""
+    specs = []
+    for part in (p.strip() for p in (text or "").split(",")):
+        if not part:
+            continue
+        part, _, weight = part.partition("*")
+        catalog, _, prices = part.partition(":")
+        try:
+            catalog_id = int(catalog)
+            weight = int(weight) if weight.strip() else 0
+            low, high = default_from, default_to
+            if prices:
+                lo, _, hi = prices.partition("-")
+                low, high = _price(lo.strip() or None), _price(hi.strip() or None)
+            specs.append(CatalogSpec(catalog_id, low, high, weight))
+        except ValueError:
+            log.warning("[KATEGORIE] Pomijam błędny wpis SNIPER_CATALOGS: %r", part)
+    return specs
+
+
+def load_catalogs_json(path):
+    """catalogs.json z analizatora → [CatalogSpec] (pusta lista, gdy brak / błąd)."""
+    try:
+        data = json.loads(Path(path).read_text(encoding="utf-8"))
+    except (OSError, ValueError) as exc:
+        log.warning("[KATEGORIE] Nie wczytałem %s: %s", path, exc)
+        return []
+    specs = []
+    for row in data.get("catalogs") or []:
+        try:
+            specs.append(CatalogSpec(int(row["catalog_id"]), _price(row.get("price_from")), _price(row.get("price_to")),
+                                     int(row.get("weight") or 0)))
+        except (KeyError, TypeError, ValueError):
+            continue
+    return specs
+
+
+def schedule(specs):
+    """Kolejność skanów w jednym cyklu - równomiernie wg wag (laptopy*3 + 2 inne → L a L b L)."""
+    current = {i: 0 for i in range(len(specs))}
+    total = sum(s.share for s in specs)
+    order = []
+    for _ in range(total):
+        for i, spec in enumerate(specs):
+            current[i] += spec.share
+        best = max(current, key=lambda i: (current[i], -i))
+        current[best] -= total
+        order.append(specs[best])
+    return order
+
+
+class CatalogSource:
+    """Aktualna lista katalogów. Tryb `auto` czyta catalogs.json ponownie, gdy plik się zmieni (bez restartu)."""
+
+    def __init__(self, setting, guides_dir, single):
+        self.setting = (setting or "").strip()
+        self.path = Path(guides_dir) / "catalogs.json" if guides_dir else None
+        self.single = single                         # CatalogSpec z SNIPER_CATALOG / SNIPER_PRICE_FROM/TO
+        self._mtime = None
+        self._specs = None
+
+    def get(self):
+        if self.setting.lower() == "auto":
+            try:
+                mtime = self.path.stat().st_mtime
+            except (OSError, AttributeError):
+                if self._specs is None:
+                    log.warning("[KATEGORIE] SNIPER_CATALOGS=auto, ale brak %s - używam zakresów z analizy "
+                                "z 2026-10-25 (uruchom: python -m analyzer sniper-guide).", self.path)
+                    self._specs = parse_catalogs(ANALYSIS_CATALOGS)
+                return self._specs
+            if mtime != self._mtime:
+                specs = load_catalogs_json(self.path)
+                if specs:
+                    if self._mtime is not None:
+                        log.info("[KATEGORIE] Nowe zakresy cen z %s: %s", self.path, "; ".join(s.label for s in specs))
+                    self._specs = specs
+                elif self._specs is None:
+                    self._specs = parse_catalogs(ANALYSIS_CATALOGS)
+                self._mtime = mtime
+            return self._specs
+        if self.setting:
+            if self._specs is None:
+                self._specs = parse_catalogs(self.setting, self.single.price_from, self.single.price_to) \
+                    or [self.single]
+            return self._specs
+        return [self.single]

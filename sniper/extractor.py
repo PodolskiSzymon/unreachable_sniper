@@ -49,6 +49,8 @@ class Offer:
     total_price: float | None
     brand: str | None = None
     condition: str | None = None
+    # Nasza kategoria (laptop, phone, tablet, console, gpu, ram, storage) - wybór wytycznych; None = guidelines.md.
+    category: str | None = None
     detected_at: str = field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
 
     def to_dict(self):

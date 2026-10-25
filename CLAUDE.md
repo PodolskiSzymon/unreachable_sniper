@@ -86,9 +86,28 @@ python -m pytest sniper/tests        # testy (bez sieci)
   lekki (`SNIPER_BROWSER_LIGHT`) i ponowne użycie sesji po restarcie (`SNIPER_SESSION_MAX_AGE`).
   Wyższe `SNIPER_PRICE_FROM` = mniej ofert = mniej zapytań o szczegóły.
 
+## Wiele kategorii (D5, 2026-10-25 – z analizatora `PodolskiSzymon/analyse_data`)
+
+* Sniper działa teraz na **serwerze** użytkownika (obok analizatora), sterowany pilotem ntfy z `analyse_data`.
+* `SNIPER_CATALOGS=auto` → katalogi + zakresy cen z `sniper/guides/catalogs.json` (generuje `python -m analyzer
+  sniper-guide`, automat 2× w tygodniu kopiuje do `ANALYZER_SNIPER_GUIDES_DIR`); bez pliku – zakresy z analizy
+  2026-10-25 (`categories.ANALYSIS_CATALOGS`). Katalogi skanowane po kolei (`categories.schedule`, laptopy waga 3) –
+  transfer proxy jak przy jednym katalogu. Mieszane 3582/3583/3584: kategoria z tytułu (karta / RAM / dysk), reszta
+  pomijana przed pobraniem szczegółów. `Offer.category` wybiera wytyczne.
+* `sniper/guides.py`: `guides/<kategoria>.md` (tabela analizatora: grupa … sprzedam za ~ … max zakup …), laptop bez
+  pliku i `category=None` → `guidelines.md`; „karta rynku” (wiersze dopasowane po tytule, warianty Pro/Max/Ti
+  blokują dopasowanie) idzie w zapytaniu; bramka ceny `SNIPER_AI_PRICE_GATE` (1,25) odcina oferty za drogie wg
+  tabeli przed AI. Kategoria bez pliku → pominięta przed AI.
+* Reguła zysku użytkownika (w wytycznych): koszty 46 zł (Podbicie 26 + wysyłka 20), marża ≥ 40% → min. 300 zł,
+  35% → 500, 30% → 700, 25% → 900, 20% → 1 100 (+40 zł/pkt), < 20% nie kupujemy. Schemat AI: dodatkowo
+  `margin_pct`, `sell_days_estimate`, `meets_profit_rule`.
+* Filtry słów: ogólne `SNIPER_AI_KEYWORDS` / `_EXCLUDE_KEYWORDS` / `SNIPER_AI_PRICE_MIN/MAX` tylko dla laptopów;
+  per kategoria `SNIPER_AI_KEYWORDS_<KAT>`, `SNIPER_AI_EXCLUDE_KEYWORDS_<KAT>`.
+* Gałąź z D5: `claude/hopeful-faraday-n33quh` (od `claude/epic-darwin-evl0s1`).
+
 ## Najważniejsze zmienne `.env`
 
-`SNIPER_PROXY_HOST`, `SNIPER_PROXY_AUTH`, `SNIPER_CATALOG` (np. 3580 = laptopy), `SNIPER_PRICE_FROM`,
+`SNIPER_PROXY_HOST`, `SNIPER_PROXY_AUTH`, `SNIPER_CATALOGS` (auto / lista), `SNIPER_GUIDES_DIR`, `SNIPER_CATALOG` (np. 3580 = laptopy), `SNIPER_PRICE_FROM`,
 `SNIPER_PRICE_TO`, `SNIPER_PER_PAGE`, `SNIPER_POLL_INTERVAL`, `SNIPER_SMTP_USER`, `SNIPER_SMTP_PASSWORD`,
 `SNIPER_EMAIL_TO`, `SNIPER_REFRESH_*`, `SNIPER_BROWSER_LIGHT`, `SNIPER_SESSION_MAX_AGE`, `SNIPER_HEARTBEAT`,
 `SNIPER_AI_*` (klucz, model, effort, próg `SNIPER_AI_MIN_SCORE`, `SNIPER_AI_NOTIFY_ALL`, filtr wstępny, limity), `SNIPER_BUY_*`, `SNIPER_MAIL_ONLY_PURCHASES` (true = maile tylko z auto-zakupu; działa tylko gdy auto-zakup wystartował), `SNIPER_AI_REPORT_ABOVE` (próg dla `oceny.html`), `SNIPER_MIRROR_DIR` / `SNIPER_MIRROR_INTERVAL_MIN` (kopia logów do chmury), `SNIPER_NTFY_*` (push na telefon), `SCRAPER_PROFILE_DIR`, `SCRAPER_LOGIN_URL`, `SCRAPER_*` (losowe przerwy przeglądarki konta, zakresy „od-do”).

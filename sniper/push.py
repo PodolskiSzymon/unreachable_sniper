@@ -15,6 +15,8 @@ import logging
 
 import httpx
 
+from .categories import CATEGORY_NAMES
+
 log = logging.getLogger("sniper.push")
 
 
@@ -26,11 +28,18 @@ def build_deal_message(offer, evaluation, topic, priority=5, attach_photo=True):
     """JSON dla ntfy (publikacja na adres serwera, temat w treści). Czysta funkcja - testowalna bez sieci."""
     ev = evaluation or {}
     score = ev.get("score")
-    title = f"Okazja {score:g}/10: {offer.get('title') or '?'}" if isinstance(score, (int, float)) \
-        else f"Okazja: {offer.get('title') or '?'}"
+    category = CATEGORY_NAMES.get(offer.get("category"))
+    title = f"Okazja {score:g}/10" if isinstance(score, (int, float)) else "Okazja"
+    title += f" ({category}): " if category else ": "
+    title += offer.get("title") or "?"
     lines = [f"{_pln(offer.get('total_price'))} z wysyłką (cena {_pln(offer.get('price'))})"]
     if ev.get("max_buy_price_pln") is not None or ev.get("potential_profit_pln") is not None:
-        lines.append(f"Maks. zakup wg AI: {_pln(ev.get('max_buy_price_pln'))} | zysk ~{_pln(ev.get('potential_profit_pln'))}")
+        margin = f" ({ev['margin_pct']:.0f}%)" if isinstance(ev.get("margin_pct"), (int, float)) else ""
+        days = f", sprzedaż ~{ev['sell_days_estimate']} dni" if ev.get("sell_days_estimate") is not None else ""
+        lines.append(f"Maks. zakup wg AI: {_pln(ev.get('max_buy_price_pln'))} | zysk ~"
+                     f"{_pln(ev.get('potential_profit_pln'))}{margin}{days}")
+        if ev.get("market_value_pln") is not None:
+            lines.append(f"Sprzedam za ~{_pln(ev.get('market_value_pln'))}")
     parts = [p for p in (ev.get("gpu_model"), ev.get("laptop_model")) if p]
     if parts:
         lines.append(" / ".join(parts))

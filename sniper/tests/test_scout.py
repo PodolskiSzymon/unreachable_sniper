@@ -45,7 +45,7 @@ def test_late_published_low_id_is_detected(monkeypatch):
         scout = Scout(ScoutConfig(category="3580", dedup_size=20), session, EmailNotifier(SmtpConfig()))
         inspected = []
 
-        async def fake_inspect(item):
+        async def fake_inspect(item, *_):
             inspected.append(item["id"])
         scout.inspect = fake_inspect
         await scout.poll_catalog()      # rozgrzewka
