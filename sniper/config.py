@@ -252,6 +252,8 @@ class AiConfig:
     daily_limit_usd: float = _env_float("SNIPER_AI_DAILY_LIMIT_USD", 0.0)
     # Bramka ceny przed AI: cena łączna > max zakup pasującego wiersza tabeli × tyle → bez AI (0 = wyłączona).
     price_gate: float = _env_float("SNIPER_AI_PRICE_GATE", 1.25)
+    # Premia do oceny okazji od sprzedawcy z Polski (krótsza dostawa = krócej zamrożona gotówka). 0 = wyłączona.
+    pl_bonus: float = _env_float("SNIPER_AI_PL_BONUS", 1.0)
 
     # Mail tylko gdy ocena >= min_score; notify_all=true -> mail o każdej ofercie (z oceną albo bez).
     min_score: float = _env_float("SNIPER_AI_MIN_SCORE", 7.0)

@@ -41,6 +41,8 @@ def build_deal_message(offer, evaluation, topic, priority=5, attach_photo=True):
                      f"{_pln(ev.get('potential_profit_pln'))}{margin}{days}")
         if ev.get("market_value_pln") is not None:
             lines.append(f"Sprzedam za ~{_pln(ev.get('market_value_pln'))}")
+    if ev.get("pl_bonus"):
+        lines.append(f"Sprzedawca z Polski: +{ev['pl_bonus']:g} do oceny (szybka dostawa)")
     kit = test_kit(offer.get("category"), offer.get("title"))
     extra = (ev.get("test_needs") or "").strip()
     if kit or extra:

@@ -381,3 +381,22 @@ def test_schedule_interleaves_catalogs():
                               parse_weights("laptop:6,phone:6,tablet:2,console:2,gpu:1,ram:1,storage:1"))
         order = [s.catalog_id for s in schedule(specs)] * 2          # także na styku cykli
         assert all(a != b for a, b in zip(order, order[1:])), order
+
+
+def test_pl_bonus_only_for_polish_deals(tmp_path):
+    from sniper.evaluator import apply_pl_bonus
+    from sniper.extractor import Seller
+    pl = Seller(id=1, name="x", country="Polska", country_code="PL", feedback_count=5, feedback_reputation=1.0,
+                stars=5.0, business=False)
+    ro = Seller(id=2, name="y", country="Rumunia", country_code="RO", feedback_count=5, feedback_reputation=1.0,
+                stars=5.0, business=False)
+    ev = apply_pl_bonus({"score": 7.0, "is_deal": True}, phone(seller=pl), 1)
+    assert ev["score"] == 8.0 and ev["score_ai"] == 7.0 and ev["pl_bonus"] == 1.0
+    assert apply_pl_bonus({"score": 9.5, "is_deal": True}, phone(seller=pl), 1)["score"] == 10.0
+    assert apply_pl_bonus({"score": 7.0, "is_deal": True}, phone(seller=ro), 1)["score"] == 7.0
+    assert apply_pl_bonus({"score": 5.0, "is_deal": False}, phone(seller=pl), 1)["score"] == 5.0   # nie robi okazji
+    client = FakeClient(response({**EVAL_DEAL, "score": 7}))
+    record = run(OfferEvaluator(ai_cfg(tmp_path, pl_bonus=1.0), FakeNotifier(), client=client).evaluate(laptop()))
+    assert record["evaluation"]["score"] == 8.0                         # laptop() ma sprzedawcę z PL
+    system = client.calls[0]["system"][0]["text"]
+    assert "premię za Polskę dolicza program" in system

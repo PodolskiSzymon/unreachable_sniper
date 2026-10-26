@@ -98,8 +98,9 @@ w ≤ 7 dni według wytycznych (mocniejsza konfiguracja / komplet / gwarancja �
 3. potential_profit_pln = market_value_pln - cena łączna - koszty transakcji z wytycznych (gdy wytyczne ich nie \
 podają: 150 zł). margin_pct = zysk / market_value_pln * 100. meets_profit_rule = zysk i marża spełniają regułę \
 minimalnego zysku z wytycznych (albo, gdy wytyczne jej nie mają, cena łączna ≤ maksymalna cena zakupu po korektach \
-z zasad dodatkowych). max_buy_price_pln = najwyższa cena łączna spełniająca regułę. Uwzględnij kraj sprzedawcy, \
-jeśli wytyczne coś o nim mówią.
+z zasad dodatkowych). max_buy_price_pln = najwyższa cena łączna spełniająca regułę. Kraj sprzedawcy NIE zmienia \
+progów ani score - premię za Polskę dolicza program; uwzględnij go tylko w sell_days_estimate (dni od zakupu do \
+sprzedaży: z Polski paczka idzie 1-2 dni, z zagranicy ~5-10).
 4. Obejrzyj zdjęcia: pęknięty lub wyraźnie uszkodzony ekran, uszkodzona obudowa / zawiasy / złącza, brak ładowarki \
 (laptop, konsola przenośna, tablet - gdy nie ma jej na zdjęciach ani w opisie, odejmij koszt zamiennika ~20-60 zł \
 od market_value_pln i wpisz to w test_needs), zdjęcia stockowe albo z internetu zamiast prawdziwych, ekran blokady (BIOS, iCloud, konto Google / \
@@ -287,6 +288,18 @@ def normalize_evaluation(text):
         "reasoning": str(data.get("reasoning") or ""),
         "red_flags": [str(f) for f in flags] if isinstance(flags, list) else [str(flags)],
     }
+
+
+def apply_pl_bonus(evaluation, offer, bonus):
+    """Okazja od sprzedawcy z Polski: score + bonus (max 10) - krótsza dostawa, szybszy obrót gotówką (prośba
+    użytkownika 2026-10-26). Tylko dla is_deal, żeby premia nie robiła okazji z oferty za drogiej."""
+    seller = getattr(offer, "seller", None)
+    if not bonus or not evaluation.get("is_deal") or getattr(seller, "country_code", None) != "PL":
+        return evaluation
+    evaluation["score_ai"] = evaluation["score"]
+    evaluation["score"] = min(10.0, evaluation["score"] + bonus)
+    evaluation["pl_bonus"] = evaluation["score"] - evaluation["score_ai"]
+    return evaluation
 
 
 def _usage(input_tokens=0, output_tokens=0, cache_creation=0, cache_read=0):
@@ -736,6 +749,7 @@ class OfferEvaluator:
                 return self._record(offer, STATUS_FAILED, error=error,
                                     latency_s=round(time.monotonic() - started, 1))
         self._count("evaluated")
+        apply_pl_bonus(evaluation, offer, getattr(self.cfg, "pl_bonus", 0))
         log.info("[AI] %s | %s/10%s | %s | zysk ~%s zł%s | zdjęcia: wysłane %d, AI widzi %d | %s", offer.id,
                  f"{evaluation['score']:g}", " OKAZJA" if evaluation["is_deal"] else "",
                  evaluation["gpu_model"] or evaluation["laptop_model"] or "model ?",
