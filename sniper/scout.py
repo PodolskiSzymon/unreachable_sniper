@@ -16,7 +16,7 @@ from pathlib import Path
 
 import httpx
 
-from .categories import AI_ENABLED_NAMES, CatalogSource, CatalogSpec, category_for, schedule, wanted_specs
+from .categories import AI_ENABLED_NAMES, CatalogSource, CatalogSpec, category_for, apply_weights, parse_weights, schedule, wanted_specs
 from .config import CATALOG_ONLY_HEADERS, CATALOG_URL, SHIPPING_URL, SIDEBAR_URL, ScoutConfig, get_catalog_params
 from .dedup import RecentIds
 from .extractor import build_offer, inactive_reason, item_url, unwrap_sidebar
@@ -105,8 +105,8 @@ class Scout:
         if not chosen:
             log.warning("[SCOUT] SNIPER_CATEGORIES=%s wyłącza wszystkie katalogi - skanuję wszystkie.",
                         ",".join(enabled))
-            return specs
-        return chosen
+            chosen = specs
+        return apply_weights(chosen, parse_weights(getattr(self.cfg, "catalog_weights", "")))
 
     def next_spec(self):
         if not self._cycle:

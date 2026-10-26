@@ -358,3 +358,16 @@ def test_purchase_cost_includes_buyer_fee(tmp_path):
     book_gate = OfferEvaluator(ai_cfg(tmp_path), FakeNotifier(), client=FakeClient(response()))
     guides(tmp_path)
     assert book_gate.gate(phone(price=600.0, total_price=615.0)) is None          # 650 ≤ 754 × 1,25
+
+
+def test_catalog_weights_override():
+    from sniper.categories import apply_weights, parse_weights
+    assert parse_weights("laptop:3, phone:3, 3582:2, zle") == {"laptop": 3, "phone": 3, "3582": 2}
+    specs = apply_weights(parse_catalogs(ANALYSIS_CATALOGS), parse_weights("laptop:3,phone:3,ram:2"))
+    shares = {s.catalog_id: s.share for s in specs}
+    assert shares[3580] == 3 and shares[3661] == 3 and shares[3728] == 1 and shares[3582] == 2
+    cfg = ScoutConfig(category="3580", catalogs="3580:250-6100,3661:100-3600,3728:100-3200",
+                      categories=(), catalog_weights="laptop:3,phone:3")
+    scout = Scout(cfg, VintedSession(), EmailNotifier(SmtpConfig()))
+    order = [scout.next_spec().catalog_id for _ in range(7)]
+    assert order.count(3580) == 3 and order.count(3661) == 3 and order.count(3728) == 1

@@ -14,7 +14,7 @@ a reszta (wentylatory, kable, pendrive'y…) jest pomijana BEZ pobierania szczeg
 import json
 import logging
 import re
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 
 log = logging.getLogger("sniper.categories")
@@ -65,6 +65,31 @@ class CatalogSpec:
     def label(self):
         names = "/".join(CATEGORY_NAMES.get(c, c) for c in self.categories) or "katalog"
         return f"{self.catalog_id} ({names}) {self.price_from or '0'}-{self.price_to or '∞'} zł"
+
+
+def parse_weights(text):
+    """'laptop:3, phone:3, 3582:2' → {'laptop': 3, 'phone': 3, '3582': 2} (błędne wpisy pomijane)."""
+    out = {}
+    for part in (p.strip() for p in (text or "").split(",")):
+        key, _, value = part.partition(":")
+        try:
+            out[key.strip().lower()] = max(1, int(value))
+        except ValueError:
+            if part:
+                log.warning("[KATEGORIE] Pomijam błędny wpis SNIPER_CATALOG_WEIGHTS: %r", part)
+    return out
+
+
+def apply_weights(specs, weights):
+    """Wagi z SNIPER_CATALOG_WEIGHTS (kategoria albo numer katalogu) zastępują te z catalogs.json / listy.
+    Katalog mieszany dostaje najwyższą wagę spośród swoich kategorii."""
+    if not weights:
+        return list(specs)
+    out = []
+    for spec in specs:
+        found = [weights[k] for k in [str(spec.catalog_id), *spec.categories] if k in weights]
+        out.append(replace(spec, weight=max(found)) if found else spec)
+    return out
 
 
 def wanted_specs(specs, enabled):
