@@ -214,15 +214,20 @@ def _ai_provider():
         return "gemini"
     if _env("ANTHROPIC_API_KEY"):
         return "anthropic"
+    if _env("OPENROUTER_API_KEY"):
+        return "openrouter"
     return "gemini"
 
 
 def _ai_api_key(provider):
-    specific = (_env("GEMINI_API_KEY") or _env("GOOGLE_API_KEY")) if provider == "gemini" else _env("ANTHROPIC_API_KEY")
+    specific = {"gemini": _env("GEMINI_API_KEY") or _env("GOOGLE_API_KEY"), "anthropic": _env("ANTHROPIC_API_KEY"),
+                "openrouter": _env("OPENROUTER_API_KEY")}.get(provider, "")
     return _env("SNIPER_AI_API_KEY") or specific
 
 
-AI_DEFAULT_MODELS = {"gemini": "gemini-3.8-flash", "anthropic": "claude-opus-5-5"}
+# openrouter: jeden klucz, setki modeli różnych firm (openrouter.ai/models, filtr „image input”); model podajesz
+# w SNIPER_AI_MODEL w formacie z ich strony, np. qwen/…, z-ai/…, mistralai/…, google/gemma-…
+AI_DEFAULT_MODELS = {"gemini": "gemini-3.8-flash", "anthropic": "claude-opus-5-5", "openrouter": ""}
 _AI_PROVIDER = _ai_provider()
 
 
@@ -235,6 +240,8 @@ class AiConfig:
     # Klucz: SNIPER_AI_API_KEY albo standardowe GEMINI_API_KEY / GOOGLE_API_KEY / ANTHROPIC_API_KEY.
     api_key: str = _ai_api_key(_AI_PROVIDER)
     model: str = _env("SNIPER_AI_MODEL") or AI_DEFAULT_MODELS.get(_AI_PROVIDER, "")
+    # Tylko openrouter (i inne API zgodne z OpenAI): adres API.
+    base_url: str = _env("SNIPER_AI_BASE_URL", "https://openrouter.ai/api/v1")
     # Głębokość myślenia: low / medium / high (Gemini: thinking_level, Claude: effort). Puste = domyślna modelu.
     effort: str = _env("SNIPER_AI_EFFORT", "medium").lower()
     # Tylko Claude: zapasowy model po stronie API, gdy główny odmówi odpowiedzi (fallbacks: "default").

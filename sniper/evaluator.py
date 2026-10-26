@@ -536,12 +536,132 @@ class GeminiBackend:
             await aclose()
 
 
+# ---------------------------------------------------------------------------- OpenRouter (API zgodne z OpenAI)
+class ApiError(Exception):
+    def __init__(self, status, text):
+        super().__init__(f"HTTP {status}: {text[:300]}")
+        self.status, self.text = status, text
+
+
+def build_openai_request(offer, cfg: AiConfig, guidelines, with_photos=True, hint="", json_mode="schema"):
+    """Body dla POST {base_url}/chat/completions (OpenRouter i inne API zgodne z OpenAI)."""
+    photos = offer.photo_urls[:max(cfg.max_photos, 0)] if with_photos else []
+    content = []
+    intro = _photo_intro(offer, photos)
+    if intro:
+        content.append({"type": "text", "text": intro})
+    content += [{"type": "image_url", "image_url": {"url": url}} for url in photos]
+    task = _task_text(offer, hint)
+    if json_mode != "schema":
+        # Model bez wsparcia schematu - opis pól w treści (normalize_evaluation i tak sprawdza JSON).
+        task += ("\n\nOdpowiedz WYŁĄCZNIE obiektem JSON z polami: "
+                 + ", ".join(EVALUATION_SCHEMA["required"]) + ".")
+    content.append({"type": "text", "text": task})
+    body = {
+        "model": cfg.model,
+        "max_tokens": cfg.max_tokens,
+        "messages": [{"role": "system", "content": system_text(guidelines, getattr(offer, "category", None))},
+                     {"role": "user", "content": content}],
+        "usage": {"include": True},                      # OpenRouter: koszt w USD w odpowiedzi
+    }
+    if json_mode == "schema":
+        body["response_format"] = {"type": "json_schema",
+                                   "json_schema": {"name": "evaluation", "strict": True, "schema": EVALUATION_SCHEMA}}
+    elif json_mode == "object":
+        body["response_format"] = {"type": "json_object"}
+    if cfg.effort:
+        body["reasoning"] = {"effort": cfg.effort}
+    return body, len(photos)
+
+
+def parse_openai(data):
+    """Odpowiedź /chat/completions → słownik oceny. Rzuca EvaluationError / InvalidResponse."""
+    choices = data.get("choices") or []
+    if not choices:
+        raise InvalidResponse(f"brak odpowiedzi modelu: {str(data)[:200]!r}")
+    choice = choices[0]
+    message = choice.get("message") or {}
+    if message.get("refusal"):
+        raise EvaluationError(f"model odmówił oceny ({str(message['refusal'])[:100]})")
+    if choice.get("finish_reason") == "length":
+        raise EvaluationError("odpowiedź ucięta (length) - zwiększ SNIPER_AI_MAX_TOKENS")
+    text = message.get("content") or ""
+    if isinstance(text, list):
+        text = "".join(part.get("text", "") for part in text if isinstance(part, dict))
+    text = text.strip()
+    if text.startswith("```"):                           # część modeli owija JSON w ```json … ```
+        text = text.strip("`")
+        text = text[text.find("{"):]
+    return normalize_evaluation(text)
+
+
+def openai_usage(data):
+    usage = data.get("usage") or {}
+    cached = (usage.get("prompt_tokens_details") or {}).get("cached_tokens") or 0
+    out = _usage((usage.get("prompt_tokens") or 0) - cached, usage.get("completion_tokens") or 0, 0, cached)
+    out["cost_reported"] = float(usage.get("cost") or 0.0)
+    return out
+
+
+class OpenAICompatBackend:
+    """OpenRouter (domyślnie) albo inne API zgodne z OpenAI. httpx bez proxy (trust_env=False) - nie przez IPRoyal."""
+
+    def __init__(self, cfg: AiConfig, client=None):
+        self.cfg = cfg
+        self.client = client or httpx.AsyncClient(trust_env=False, timeout=cfg.timeout)
+        # Model nie umie schematu JSON → kolejne zapytania w prostszym trybie (bez ponawiania tego samego błędu).
+        self.json_mode = "schema"
+
+    async def generate(self, offer, guidelines, with_photos, hint=""):
+        body, photos = build_openai_request(offer, self.cfg, guidelines, with_photos, hint, self.json_mode)
+        headers = {"Authorization": f"Bearer {self.cfg.api_key}", "X-Title": "Vinted Sniper"}
+        response = await self.client.post(self.cfg.base_url.rstrip("/") + "/chat/completions", json=body,
+                                          headers=headers)
+        if response.status_code >= 400:
+            error = ApiError(response.status_code, response.text)
+            if response.status_code == 400 and self.json_mode != "prompt" and \
+                    re.search(r"response_format|json_schema|structured", response.text, re.I):
+                self.json_mode = "object" if self.json_mode == "schema" else "prompt"
+                log.warning("[AI] %s nie obsługuje tego formatu JSON - przechodzę na tryb %s.", self.cfg.model,
+                            self.json_mode)
+                return await self.generate(offer, guidelines, with_photos, hint)
+            raise error
+        data = response.json()
+        return data, openai_usage(data), photos
+
+    parse = staticmethod(parse_openai)
+
+    def is_photo_error(self, exc):
+        return isinstance(exc, ApiError) and exc.status == 400 and re.search(r"image|url|fetch", exc.text, re.I)
+
+    def is_retryable(self, exc):
+        if isinstance(exc, httpx.TransportError):
+            return True
+        return isinstance(exc, ApiError) and (exc.status == 429 or exc.status >= 500)
+
+    def describe(self, exc):
+        if isinstance(exc, ApiError):
+            if exc.status in (401, 403):
+                return f"zły klucz API lub brak dostępu ({exc.status}) - sprawdź OPENROUTER_API_KEY"
+            if exc.status == 402:
+                return "brak środków na koncie OpenRouter (402)"
+            return str(exc)
+        return None
+
+    async def close(self):
+        await self.client.aclose()
+
+
 def make_backend(cfg: AiConfig, client=None):
     if cfg.provider == "gemini":
         return GeminiBackend(cfg, client)
     if cfg.provider == "anthropic":
         return AnthropicBackend(cfg, client)
-    raise ValueError(f"Nieznany SNIPER_AI_PROVIDER={cfg.provider!r} (gemini albo anthropic)")
+    if cfg.provider in ("openrouter", "openai"):
+        if not cfg.model:
+            raise ValueError("SNIPER_AI_PROVIDER=openrouter wymaga SNIPER_AI_MODEL (np. qwen/… z openrouter.ai/models)")
+        return OpenAICompatBackend(cfg, client)
+    raise ValueError(f"Nieznany SNIPER_AI_PROVIDER={cfg.provider!r} (gemini, anthropic albo openrouter)")
 
 
 def _retryable(backend, exc):
@@ -556,7 +676,8 @@ def _describe(exc, backend=None):
 
 # ---------------------------------------------------------------------------- statystyki
 _STAT_KEYS = ("calls", "evaluated", "failed", "filtered", "notified",
-              "input_tokens", "output_tokens", "cache_creation_input_tokens", "cache_read_input_tokens")
+              "input_tokens", "output_tokens", "cache_creation_input_tokens", "cache_read_input_tokens",
+              "cost_reported")
 
 
 class _Stats(dict):
@@ -564,8 +685,9 @@ class _Stats(dict):
         super().__init__({key: 0 for key in _STAT_KEYS})
 
     def cost_usd(self, price_in, price_out):
-        # Zapis do cache = 1,25 x cena wejścia, odczyt z cache ~0,1 x (szacunek z góry).
-        return (self["input_tokens"] * price_in + self["cache_creation_input_tokens"] * price_in * 1.25
+        # Zapis do cache = 1,25 x cena wejścia, odczyt z cache ~0,1 x (szacunek z góry). OpenRouter podaje koszt sam
+        # (cost_reported, USD) - wtedy ceny modelu są 0 i liczy się tylko on.
+        return self["cost_reported"] + (self["input_tokens"] * price_in + self["cache_creation_input_tokens"] * price_in * 1.25
                 + self["cache_read_input_tokens"] * price_in * 0.1 + self["output_tokens"] * price_out) / 1e6
 
 
@@ -915,6 +1037,44 @@ def sample_laptop_offer():
     )
 
 
+def previous_evaluations(log_dir, model):
+    """{id oferty: ostatnia ocena INNYM modelem} z evaluations.jsonl."""
+    path = Path(log_dir) / "evaluations.jsonl"
+    out = {}
+    if not path.exists():
+        return out
+    for line in path.read_text(encoding="utf-8").splitlines():
+        try:
+            record = json.loads(line)
+        except ValueError:
+            continue
+        if record.get("status") == STATUS_EVALUATED and record.get("model") != model and record.get("evaluation"):
+            out[(record.get("offer") or {}).get("id")] = record
+    return out
+
+
+def compare_lines(log_dir, records, model):
+    """Tabela: ocena nowym modelem vs wcześniejsza innym (zgodność ocen i decyzji „okazja”)."""
+    old = previous_evaluations(log_dir, model)
+    rows, same_deal, diffs = [], 0, []
+    for record in records:
+        ev = record.get("evaluation")
+        prev = old.get(record["offer"]["id"])
+        if not ev or not prev:
+            continue
+        pev = prev["evaluation"]
+        same_deal += pev["is_deal"] == ev["is_deal"]
+        diffs.append(abs(pev["score"] - ev["score"]))
+        flag = "  ← INNA DECYZJA" if pev["is_deal"] != ev["is_deal"] else ("  ← różnica ≥ 3" if diffs[-1] >= 3 else "")
+        rows.append(f"  {pev['score']:>4g} → {ev['score']:<4g} {(record['offer'].get('title') or '')[:50]:<50} "
+                    f"({prev.get('model')}){flag}")
+    if not rows:
+        return ["Porównanie: brak wcześniejszych ocen tych ofert innym modelem (oceń je najpierw obecnym modelem)."]
+    return ([f"Porównanie z wcześniejszymi ocenami ({len(rows)} ofert): ta sama decyzja „okazja / nie” "
+             f"{same_deal}/{len(rows)}, średnia różnica oceny {sum(diffs) / len(diffs):.1f} pkt",
+             "  stara → nowa  tytuł"] + rows)
+
+
 def _load_offers(log_dir, last):
     from .extractor import Offer
 
@@ -932,6 +1092,8 @@ async def _cli(argv=None):
     parser = argparse.ArgumentParser(description="Ocena ofert przez AI bez uruchamiania Zwiadowcy (bez maili).")
     parser.add_argument("--last", type=int, default=1, help="ile ostatnich ofert z logs/offers.jsonl ocenić")
     parser.add_argument("--no-filter", action="store_true", help="oceniaj też oferty odrzucane przez filtr wstępny")
+    parser.add_argument("--compare", action="store_true",
+                        help="porównaj z wcześniejszymi ocenami tych ofert innym modelem (z logs/evaluations.jsonl)")
     args = parser.parse_args(argv)
     logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(name)s: %(message)s")
     for noisy in ("httpx", "httpx2", "anthropic", "google_genai"):
@@ -954,7 +1116,8 @@ async def _cli(argv=None):
                 return evaluator._record(offer, STATUS_FILTERED, prefilter_reason=reason)
             return await evaluator.evaluate(offer)
 
-        for record in await asyncio.gather(*(one(offer) for offer in offers)):
+        records = await asyncio.gather(*(one(offer) for offer in offers))
+        for record in records:
             record["source"] = "cli"
             evaluator.save(record)
             ev = record["evaluation"]
@@ -969,6 +1132,8 @@ async def _cli(argv=None):
                     print(f"  ! {flag}")
             else:
                 print(f"  {record['status']}: {record['error'] or record['prefilter_reason']}")
+        if args.compare:
+            print("\n" + "\n".join(compare_lines(cfg.log_dir, records, cfg.ai.model)))
         print(f"\n{evaluator.window_report()}")
         print(f"Zapisano do {Path(cfg.log_dir) / 'evaluations.csv'} (i .jsonl).")
     finally:

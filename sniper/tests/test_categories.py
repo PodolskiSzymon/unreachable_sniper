@@ -5,6 +5,7 @@ import os
 import time
 
 import httpx
+import pytest
 
 from sniper.categories import (ANALYSIS_CATALOGS, CatalogSource, CatalogSpec, category_for, load_catalogs_json,
                                parse_catalogs, schedule)
@@ -408,3 +409,56 @@ def test_prompt_scoring_targets_capital_turnover():
     assert "ograniczony kapitał" in text and "45-50%" in text and "800 zł" in text and "9 → 10" in text
     assert "- 8: dobra - marża ok. 35% przy szybkiej sprzedaży" in text and "- 7: reguła zysku spełniona, marża ok. 30%" in text
     assert "orientacyjne" in text                                      # nie na sztywno
+
+
+def _openrouter_client(handler):
+    return httpx.AsyncClient(transport=httpx.MockTransport(handler))
+
+
+def test_openrouter_backend_request_cost_and_json_fallback(tmp_path):
+    seen = []
+
+    def handler(request):
+        body = json.loads(request.content)
+        seen.append(body)
+        assert request.headers["authorization"] == "Bearer test"
+        assert str(request.url) == "https://openrouter.ai/api/v1/chat/completions"
+        if body.get("response_format", {}).get("type") == "json_schema":
+            return httpx.Response(400, text='{"error": "response_format json_schema is not supported"}')
+        return httpx.Response(200, json={
+            "choices": [{"finish_reason": "stop", "message": {"content": "```json\n" + json.dumps(EVAL_DEAL) + "\n```"}}],
+            "usage": {"prompt_tokens": 3000, "completion_tokens": 400, "cost": 0.0021,
+                      "prompt_tokens_details": {"cached_tokens": 1000}}})
+
+    cfg = ai_cfg(tmp_path, provider="openrouter", model="qwen/qwen-vl-test", base_url="https://openrouter.ai/api/v1",
+                 effort="low")
+    evaluator = OfferEvaluator(cfg, FakeNotifier(), client=_openrouter_client(handler))
+    record = run(evaluator.evaluate(laptop()))
+    assert record["status"] == STATUS_EVALUATED and record["evaluation"]["score"] == 8
+    assert seen[0]["response_format"]["type"] == "json_schema" and seen[1]["response_format"]["type"] == "json_object"
+    user = seen[1]["messages"][1]["content"]
+    assert [c["type"] for c in user].count("image_url") == 3 and seen[1]["reasoning"] == {"effort": "low"}
+    assert seen[1]["usage"] == {"include": True}
+    assert evaluator.total["cost_reported"] == pytest.approx(0.0021)
+    assert evaluator.total.cost_usd(0, 0) == pytest.approx(0.0021)     # dzienny limit liczy koszt z OpenRouter
+
+
+def test_openrouter_errors_described(tmp_path):
+    from sniper.evaluator import ApiError, OpenAICompatBackend
+    backend = OpenAICompatBackend(ai_cfg(tmp_path, provider="openrouter", model="x/y",
+                                         base_url="https://openrouter.ai/api/v1"), client=_openrouter_client(None))
+    assert "OPENROUTER_API_KEY" in backend.describe(ApiError(401, "no"))
+    assert "brak środków" in backend.describe(ApiError(402, "credits"))
+    assert backend.is_retryable(ApiError(429, "slow")) and not backend.is_retryable(ApiError(400, "bad"))
+    assert backend.is_photo_error(ApiError(400, "failed to fetch image url"))
+
+
+def test_compare_lines(tmp_path):
+    from sniper.evaluator import compare_lines
+    old = {"status": STATUS_EVALUATED, "model": "gemini-3.8-flash",
+           "offer": {"id": 7001, "title": "Legion"}, "evaluation": {"score": 8, "is_deal": True}}
+    (tmp_path / "evaluations.jsonl").write_text(json.dumps(old) + "\n", encoding="utf-8")
+    new = {"offer": {"id": 7001, "title": "Legion"}, "evaluation": {"score": 4, "is_deal": False}}
+    text = "\n".join(compare_lines(tmp_path, [new], "qwen/x"))
+    assert "ta sama decyzja „okazja / nie” 0/1" in text and "INNA DECYZJA" in text and "8 → 4" in text
+    assert "brak wcześniejszych" in compare_lines(tmp_path, [new], "gemini-3.8-flash")[0]
