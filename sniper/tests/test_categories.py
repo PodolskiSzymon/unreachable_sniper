@@ -371,3 +371,13 @@ def test_catalog_weights_override():
     scout = Scout(cfg, VintedSession(), EmailNotifier(SmtpConfig()))
     order = [scout.next_spec().catalog_id for _ in range(7)]
     assert order.count(3580) == 3 and order.count(3661) == 3 and order.count(3728) == 1
+
+
+def test_schedule_interleaves_catalogs():
+    """Waga 6 = 6 skanów w cyklu, ale rozrzuconych - nigdy ten sam katalog dwa razy z rzędu."""
+    from sniper.categories import apply_weights, parse_weights
+    for catalogs in ("3580,3661,3728,3025", ANALYSIS_CATALOGS):
+        specs = apply_weights(parse_catalogs(catalogs),
+                              parse_weights("laptop:6,phone:6,tablet:2,console:2,gpu:1,ram:1,storage:1"))
+        order = [s.catalog_id for s in schedule(specs)] * 2          # także na styku cykli
+        assert all(a != b for a, b in zip(order, order[1:])), order
