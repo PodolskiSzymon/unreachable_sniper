@@ -16,6 +16,7 @@ from html import escape
 import aiosmtplib
 
 from .categories import test_kit
+from .extractor import purchase_cost
 
 log = logging.getLogger("sniper.notifier")
 
@@ -81,8 +82,10 @@ def ai_lines(ai):
     rows = []
     if ev.get("gpu_model") or category in (None, "laptop", "gpu"):   # karta tylko tam, gdzie ma sens
         rows.append(("Karta", ev.get("gpu_model") or "nie rozpoznano"))
+    cost = purchase_cost(ai.get("offer") or {})
     return rows + [
         ("Model", ev.get("laptop_model") or "?"),
+        ("Koszt zakupu", f"{_pln(cost)} (cena + wysyłka + opłata Vinted)" if cost is not None else "?"),
         ("Wartość rynkowa", _pln(ev.get("market_value_pln"))),
         ("Maks. cena zakupu", _pln(ev.get("max_buy_price_pln"))),
         ("Potencjalny zysk", _pln(ev.get("potential_profit_pln"))

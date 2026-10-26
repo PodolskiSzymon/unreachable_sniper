@@ -81,6 +81,10 @@ def requests_proxies(proxy_url=None):
 
 
 BASE_URL = "https://www.vinted.pl"
+# Opłata Vinted płacona przez KUPUJĄCEGO (ochrona kupującego): % ceny + stała kwota (2026-10-26: 416,80 zł → 23,74 zł
+# = 5% + 2,90 zł). Wchodzi w koszt zakupu przy ocenie okazji, bramce ceny i powiadomieniach.
+BUYER_FEE_PCT = _env_float("SNIPER_BUYER_FEE_PCT", 5.0)
+BUYER_FEE_FIXED = _env_float("SNIPER_BUYER_FEE_FIXED", 2.90)
 # Nowy endpoint katalogu (Vinted przeniósł listę z www.vinted.pl/api/v2/catalog/items)
 CATALOG_URL = "https://api.vinted.pl/svc-catalogue/items"
 SIDEBAR_URL = BASE_URL + "/api/v2/items/{item_id}/details/sidebar"

@@ -346,3 +346,15 @@ def test_handheld_console_kit_and_mail_rows():
     assert "Karta" not in labels and "Model" in labels
     ai["offer"]["category"] = "laptop"
     assert "Karta" in [k for k, _ in ai_lines(ai)]
+
+
+def test_purchase_cost_includes_buyer_fee(tmp_path):
+    from sniper.evaluator import offer_text
+    from sniper.extractor import buyer_fee, purchase_cost
+    assert buyer_fee(416.80) == 23.74                                 # S22 z Vinted 2026-10-26: 440,54 - 416,80
+    assert purchase_cost({"price": 416.80, "total_price": 425.55}) == 449.29
+    offer = phone(price=416.80, total_price=425.55)
+    assert "KOSZT ZAKUPU (cena + wysyłka + opłata): 449.29 PLN" in offer_text(offer)
+    book_gate = OfferEvaluator(ai_cfg(tmp_path), FakeNotifier(), client=FakeClient(response()))
+    guides(tmp_path)
+    assert book_gate.gate(phone(price=600.0, total_price=615.0)) is None          # 650 ≤ 754 × 1,25

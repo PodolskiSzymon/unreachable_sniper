@@ -10,7 +10,7 @@ from dataclasses import asdict, dataclass, field
 from datetime import datetime, timezone
 from decimal import Decimal, InvalidOperation
 
-from .config import BASE_URL
+from .config import BASE_URL, BUYER_FEE_FIXED, BUYER_FEE_PCT
 
 
 @dataclass
@@ -215,3 +215,20 @@ def build_offer(item_id, sidebar, shipping_payload=None, catalog_item=None, user
         brand=brand,
         condition=_attribute(sidebar, "status") or catalog_item.get("status"),
     )
+
+
+def buyer_fee(price):
+    """Opłata Vinted dla kupującego (SNIPER_BUYER_FEE_PCT % + SNIPER_BUYER_FEE_FIXED) albo None."""
+    if price is None:
+        return None
+    return round(price * BUYER_FEE_PCT / 100 + BUYER_FEE_FIXED, 2)
+
+
+def purchase_cost(offer):
+    """Ile naprawdę zapłacę: cena + wysyłka + opłata Vinted (Offer albo słownik z Offer.to_dict())."""
+    get = offer.get if isinstance(offer, dict) else lambda k: getattr(offer, k, None)
+    price, total = get("price"), get("total_price")
+    base = total if total is not None else price
+    if base is None:
+        return None
+    return round(base + (buyer_fee(price) or 0), 2)

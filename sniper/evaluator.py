@@ -92,7 +92,8 @@ telefon / tablet: model i pamięć; konsola: wersja; podzespół: układ, pojemn
 (naklejki, zrzuty z ustawień / menedżera urządzeń / BIOS). Dopasuj ofertę do wiersza tabeli wytycznych; \
 <karta_rynku> podaje wiersze dopasowane automatycznie po tytule (wskazówka - sprawdź, czy naprawdę pasują). \
 Gdy nie da się ustalić modelu albo brak pasującego wiersza, napisz to i oceń ostrożnie.
-2. Cena zakupu = cena łączna (cena + wysyłka). market_value_pln = realna cena sprzedaży tej konkretnej sztuki \
+2. Cena zakupu = KOSZT ZAKUPU z oferty (cena + wysyłka + opłata Vinted dla kupującego) - wszędzie niżej „cena \
+łączna” oznacza właśnie ten koszt. market_value_pln = realna cena sprzedaży tej konkretnej sztuki \
 w ≤ 7 dni według wytycznych (mocniejsza konfiguracja / komplet / gwarancja → wyżej, słabsza / drobna usterka → niżej).
 3. potential_profit_pln = market_value_pln - cena łączna - koszty transakcji z wytycznych (gdy wytyczne ich nie \
 podają: 150 zł). margin_pct = zysk / market_value_pln * 100. meets_profit_rule = zysk i marża spełniają regułę \
@@ -160,7 +161,9 @@ class Guidelines:
 
 # ---------------------------------------------------------------------------- filtr wstępny
 def _offer_price(offer):
-    return offer.total_price if offer.total_price is not None else offer.price
+    """Koszt zakupu: cena + wysyłka + opłata Vinted dla kupującego."""
+    from .extractor import purchase_cost
+    return purchase_cost(offer)
 
 
 def prefilter(offer, cfg: AiConfig):
@@ -189,6 +192,8 @@ def _money(amount, currency="PLN"):
 
 
 def offer_text(offer):
+    from .extractor import buyer_fee, purchase_cost
+
     """Dane oferty dla modelu - te same pola co w mailu."""
     ship = offer.shipping
     if ship is None:
@@ -212,7 +217,9 @@ def offer_text(offer):
         f"Tytuł: {offer.title}\n"
         f"Cena: {_money(offer.price, offer.currency)}\n"
         f"Wysyłka: {shipping}\n"
-        f"Cena łączna: {_money(offer.total_price, offer.currency)}\n"
+        f"Cena łączna (cena + wysyłka): {_money(offer.total_price, offer.currency)}\n"
+        f"Opłata Vinted dla kupującego: {_money(buyer_fee(offer.price), offer.currency)}\n"
+        f"KOSZT ZAKUPU (cena + wysyłka + opłata): {_money(purchase_cost(offer), offer.currency)}\n"
         f"Stan: {offer.condition or '?'}\n"
         f"Marka: {offer.brand or '?'}\n"
         f"Sprzedawca: {'; '.join(seller)}\n"

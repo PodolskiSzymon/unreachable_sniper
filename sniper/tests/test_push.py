@@ -24,7 +24,7 @@ def test_deal_message_polish_utf8_click_and_photo():
     msg = pu.build_deal_message(OFFER, EVAL, "sniper-a8f3kq", priority=5)
     assert msg["topic"] == "sniper-a8f3kq" and msg["priority"] == 5
     assert msg["title"] == "Okazja 9/10: Legion 5 RTX 3060"
-    assert "2 422 zł z wysyłką" in msg["message"] and "zysk ~600 zł" in msg["message"]
+    assert "2 545 zł z wysyłką i opłatą Vinted" in msg["message"]          # 2 421,90 + 5% × 2 400 + 2,90 and "zysk ~600 zł" in msg["message"]
     assert msg["click"] == OFFER["url"] and msg["actions"][0]["url"] == OFFER["url"]
     assert msg["attach"] == OFFER["photo_urls"][0]
     assert "attach" not in pu.build_deal_message(OFFER, EVAL, "t", attach_photo=False)
