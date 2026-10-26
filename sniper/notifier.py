@@ -53,6 +53,11 @@ def _seller_lines(offer):
     }
 
 
+def _identity(ev):
+    from .evaluator import identity
+    return identity(ev)
+
+
 def _pln(value):
     return f"{value:.0f} zł" if isinstance(value, (int, float)) else "?"
 
@@ -84,7 +89,8 @@ def ai_lines(ai):
         rows.append(("Karta", ev.get("gpu_model") or "nie rozpoznano"))
     cost = purchase_cost(ai.get("offer") or {})
     return rows + [
-        ("Model", ev.get("laptop_model") or "?"),
+        ("Model", _identity(ev) or ev.get("laptop_model") or "?"),
+        ("W zestawie", ", ".join(ev.get("accessories") or []) or "-"),
         ("Koszt zakupu", f"{_pln(cost)} (cena + wysyłka + opłata Vinted)" if cost is not None else "?"),
         ("Wartość rynkowa", _pln(ev.get("market_value_pln"))),
         ("Maks. cena zakupu", _pln(ev.get("max_buy_price_pln"))),

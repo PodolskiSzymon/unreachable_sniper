@@ -47,9 +47,13 @@ def build_deal_message(offer, evaluation, topic, priority=5, attach_photo=True):
     extra = (ev.get("test_needs") or "").strip()
     if kit or extra:
         lines.append("Do testu: " + "; ".join(x for x in (kit, extra) if x))
-    parts = [p for p in (ev.get("gpu_model"), ev.get("laptop_model")) if p]
+    from .evaluator import identity
+    name = identity(ev)
+    parts = [p for p in (name or ev.get("laptop_model"), ev.get("gpu_model")) if p]
     if parts:
-        lines.append(" / ".join(parts))
+        lines.append(" / ".join(dict.fromkeys(parts)))
+    if ev.get("accessories"):
+        lines.append("W zestawie: " + ", ".join(ev["accessories"]))
     if ev.get("reasoning"):
         lines.append(str(ev["reasoning"])[:300])
     msg = {
