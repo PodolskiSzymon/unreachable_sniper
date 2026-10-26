@@ -276,6 +276,12 @@ class AiConfig:
     # Mail tylko gdy ocena >= min_score; notify_all=true -> mail o każdej ofercie (z oceną albo bez).
     min_score: float = _env_float("SNIPER_AI_MIN_SCORE", 7.0)
     notify_all: bool = _env_bool("SNIPER_AI_NOTIFY_ALL", False)
+    # Mail o ofercie, której AI nie oceniło (błąd API). false = tylko w logu i evaluations.csv (2026-10-26: 12 maili
+    # „NIEOCENIONA” w 2 minuty przy błędach API).
+    notify_failed: bool = _env_bool("SNIPER_AI_NOTIFY_FAILED", True)
+    # Ta sama oferta (ID) wraca do katalogu (podbicie, ponowne wystawienie) - bez ponownej oceny AI i maila, chyba
+    # że cena spadła. Pamięć z logs/evaluations.jsonl, także po restarcie.
+    skip_seen: bool = _env_bool("SNIPER_AI_SKIP_SEEN", True)
     # true = mail TYLKO o okazjach, które auto-zakup kupił / próbował kupić (zwykłe oferty i błędy AI bez maila).
     # Działa tylko przy włączonym auto-zakupie - bez niego maile idą jak zwykle, żeby nie zgubić okazji.
     mail_only_purchases: bool = _env_bool("SNIPER_MAIL_ONLY_PURCHASES", False)

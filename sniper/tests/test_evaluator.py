@@ -46,7 +46,7 @@ def ai_cfg(tmp_path, **kw):
                     notify_all=False, max_concurrent=2, timeout=5.0, retries=2, retry_delay=0.0,
                     price_min=None, price_max=9000.0, keywords=("rtx", "4060"), exclude_keywords=(),
                     keywords_in="title+description", guides_dir=str(tmp_path / "guides"), price_gate=1.25,
-                    category_keywords={}, category_exclude={}, pl_bonus=0.0)
+                    category_keywords={}, category_exclude={}, pl_bonus=0.0, skip_seen=False)
     return replace(base, **kw)
 
 

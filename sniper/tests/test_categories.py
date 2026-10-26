@@ -6,6 +6,7 @@ import time
 
 import httpx
 import pytest
+from dataclasses import replace
 
 from sniper.categories import (ANALYSIS_CATALOGS, CatalogSource, CatalogSpec, category_for, load_catalogs_json,
                                parse_catalogs, schedule)
@@ -16,7 +17,8 @@ from sniper.notifier import EmailNotifier
 from sniper.push import build_deal_message
 from sniper.scout import Scout, catalog_params
 from sniper.session import VintedSession
-from sniper.tests.test_evaluator import EVAL_DEAL, FakeClient, FakeNotifier, ai_cfg, laptop, response, run
+from sniper.tests.test_evaluator import (EVAL_DEAL, FakeClient, FakeNotifier, ai_cfg, laptop, response, run,
+                                        submit_and_wait)
 
 # Fragment pliku z analizatora (analyzer/guide.py: table) - te same kolumny.
 PHONE_GUIDE = """# Telefony – wytyczne oceny okazji (z danych rynku, 2026-10-25)
@@ -563,3 +565,42 @@ def test_comparables_cap_ai_value_in_evaluation(tmp_path):
     assert ev["market_value_ai"] == 850 and ev["market_value_pln"] < 650
     assert ev["is_deal"] is False and ev["score"] <= 6 and ev["comparables"]["n_active"] == 12
     assert "<porownywalne>" in client.calls[0]["messages"][0]["content"][-1]["text"]
+
+
+def test_skip_already_evaluated_offer_unless_cheaper(tmp_path):
+    client = FakeClient(response())
+    cfg = ai_cfg(tmp_path, skip_seen=True)
+    evaluator = OfferEvaluator(cfg, FakeNotifier(), log_dir=tmp_path, client=client)
+    run(submit_and_wait(evaluator, laptop()))
+    run(submit_and_wait(evaluator, laptop()))                              # ten sam ID, ta sama cena
+    assert len(client.calls) == 1
+    again = OfferEvaluator(cfg, FakeNotifier(), log_dir=tmp_path, client=client)   # po restarcie - z pliku
+    run(submit_and_wait(again, laptop()))
+    assert len(client.calls) == 1
+    last = json.loads((tmp_path / "evaluations.jsonl").read_text(encoding="utf-8").splitlines()[-1])
+    assert last["prefilter_reason"].startswith("już oceniona")
+    run(submit_and_wait(again, laptop(price=1500.0, total_price=1515.0)))   # tańsza → ocena od nowa
+    assert len(client.calls) == 2
+
+
+def test_gate_by_comparables_and_failed_mail_switch(tmp_path):
+    (tmp_path / "guides").mkdir()
+    _comparables_db(tmp_path / "guides" / "comparables.db", _market_rows())
+    (tmp_path / "guides" / "phone.md").write_text("# Telefony\n", encoding="utf-8")
+    evaluator = OfferEvaluator(ai_cfg(tmp_path, comparable_factor=1.2), FakeNotifier(), client=FakeClient(response()))
+    pricey = phone(title="iPhone 13 128GB", price=1100.0, total_price=1115.0)    # szacunek ~1 200 zł
+    assert "za drogo wg podobnych ofert" in evaluator.gate(pricey)
+    assert evaluator.gate(phone(id=8002, title="iPhone 13 128GB", price=600.0, total_price=615.0)) is None
+    from sniper.evaluator import STATUS_FAILED
+    failed = {"status": STATUS_FAILED}
+    assert evaluator.should_notify(failed) is True
+    evaluator.cfg = replace(evaluator.cfg, notify_failed=False)
+    assert evaluator.should_notify(failed) is False
+
+
+def test_very_cheap_deal_gets_warning(tmp_path):
+    from sniper.evaluator import enforce_profit_rule
+    cfg = ai_cfg(tmp_path)
+    ipad = phone(category="tablet", title="iPad A16 128GB", price=600.0, total_price=606.0)
+    ev = enforce_profit_rule({"score": 10.0, "is_deal": True, "market_value_pln": 1847.0}, ipad, cfg)
+    assert ev["is_deal"] is True and any("bardzo tanio" in f for f in ev["red_flags"])

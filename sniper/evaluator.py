@@ -351,6 +351,12 @@ def enforce_profit_rule(evaluation, offer, cfg, comps=None):
     evaluation.update(potential_profit_pln=round(profit), margin_pct=round(margin * 100, 1),
                       max_buy_price_pln=rule_max_buy(value, cfg), meets_profit_rule=meets,
                       rule_check="ok" if meets else "naruszona")
+    reference = (comps or {}).get("estimate") or evaluation.get("market_value_ai") or value
+    if evaluation.get("is_deal") and reference and cost < 0.45 * reference:
+        evaluation.setdefault("red_flags", []).append(
+            f"Program: bardzo tanio - {cost / reference * 100:.0f}% wartości. Częste przy blokadzie (iCloud / konto), "
+            f"ukrytej usterce albo oszustwie - przed zakupem sprawdź opis, zdjęcia ekranu ustawień, płać tylko przez "
+            f"Vinted")
     if evaluation.get("is_deal") and not meets:
         evaluation["score_ai"] = evaluation["score"]
         evaluation.update(is_deal=False, score=min(evaluation["score"], 6.0))
@@ -872,7 +878,8 @@ class OfferEvaluator:
     # ------------------------------------------------------------------ wejście z Zwiadowcy
     def submit(self, offer):
         """Nieblokujące: filtr wstępny od razu, ocena AI w osobnym zadaniu."""
-        reason = prefilter(offer, self.cfg) or self.gate(offer) or self.over_daily_limit()
+        reason = (self.already_seen(offer) or prefilter(offer, self.cfg) or self.gate(offer)
+                  or self.over_daily_limit())
         if reason:
             log.info("[AI] Pomijam %s przed AI: %s", offer.id, reason)
             self._count("filtered")
@@ -882,12 +889,68 @@ class OfferEvaluator:
         self._tasks.add(task)
         task.add_done_callback(self._tasks.discard)
 
+    def already_seen(self, offer):
+        """Oferta już oceniona (ten sam ID) i nie tańsza niż wtedy → powód pominięcia (bez kosztu i maila)."""
+        if not getattr(self.cfg, "skip_seen", False):
+            return None
+        if getattr(self, "_seen", None) is None:
+            self._seen = self._load_seen()
+        price, before = _offer_price(offer), self._seen.get(offer.id)
+        self._seen[offer.id] = price if before is None or price is None else min(price, before)
+        if before is not None and (price is None or price >= before - 1):
+            return f"już oceniona (koszt wtedy {before:.0f} zł)" if before is not None else "już oceniona"
+        return None
+
+    def _load_seen(self, limit=20000):
+        """{ID oferty: najniższy koszt zakupu} z ostatnich ocen w logs/evaluations.jsonl."""
+        seen = {}
+        path = self.log_dir / "evaluations.jsonl" if self.log_dir else None
+        if not path or not path.exists():
+            return seen
+        try:
+            lines = path.read_text(encoding="utf-8").splitlines()[-limit:]
+        except OSError:
+            return seen
+        from .extractor import purchase_cost
+        for line in lines:
+            try:
+                record = json.loads(line)
+            except ValueError:
+                continue
+            if record.get("status") != STATUS_EVALUATED:
+                continue
+            offer = record.get("offer") or {}
+            cost = purchase_cost(offer)
+            if offer.get("id") is not None and cost is not None:
+                seen[offer["id"]] = min(cost, seen.get(offer["id"], cost))
+        return seen
+
     def gate(self, offer):
-        """Bez wytycznych dla kategorii albo za drogo wg tabeli → powód pominięcia (zero kosztów)."""
+        """Bez wytycznych dla kategorii albo za drogo wg tabeli / podobnych ofert → powód pominięcia (zero kosztów)."""
         category = getattr(offer, "category", None)
         if category is not None and self.guides.path(category) is None:
             return f"brak wytycznych dla kategorii {category}"
-        return self.guides.gate(category, offer.title, _offer_price(offer), getattr(self.cfg, "price_gate", 0))
+        reason = self.guides.gate(category, offer.title, _offer_price(offer), getattr(self.cfg, "price_gate", 0))
+        if reason:
+            return reason
+        comps = self.lookup_comparables(offer)
+        cost, factor = _offer_price(offer), getattr(self.cfg, "comparable_factor", 1.2)
+        if comps and comps.get("estimate") and cost is not None and factor:
+            # Nawet przy wycenie AI o `factor` ponad dane: marża 30% wymaga kosztu ≤ 0,7 × wartości.
+            limit = comps["estimate"] * factor * 0.7
+            if cost > limit:
+                return (f"za drogo wg podobnych ofert: {cost:.0f} zł > {limit:.0f} zł (szacunek "
+                        f"{comps['estimate']:.0f} zł z {comps['n_active'] + comps['n_gone']} ofert)")
+        return None
+
+    def lookup_comparables(self, offer):
+        cache = self.__dict__.setdefault("_comps_cache", {})
+        if offer.id not in cache:
+            if len(cache) > 500:
+                cache.clear()
+            comparables = getattr(self, "comparables", None)
+            cache[offer.id] = comparables.lookup(getattr(offer, "category", None), offer.title) if comparables else None
+        return cache[offer.id]
 
     async def _process(self, offer):
         try:
@@ -902,7 +965,9 @@ class OfferEvaluator:
         # (zalogowany). Przy padniętej sesji okazje idą zwykłym mailem, żeby nie przepadły.
         if getattr(self.cfg, "mail_only_purchases", False) and getattr(self.buyer, "ready", False):
             return False
-        if self.cfg.notify_all or record["status"] == STATUS_FAILED:
+        if record["status"] == STATUS_FAILED:
+            return getattr(self.cfg, "notify_failed", True)
+        if self.cfg.notify_all:
             return True
         return record["status"] == STATUS_EVALUATED and record["evaluation"]["score"] >= self.cfg.min_score
 
@@ -954,8 +1019,7 @@ class OfferEvaluator:
         """Ocena jednej oferty. Nigdy nie rzuca - błąd = rekord ze statusem 'nieoceniona'."""
         started = time.monotonic()
         async with self._slots:
-            comps = self.comparables.lookup(getattr(offer, "category", None), offer.title) \
-                if getattr(self, "comparables", None) else None
+            comps = self.lookup_comparables(offer)
             try:
                 evaluation, usage, attempts, photos = await self._call_model(offer, comps)
             except Exception as exc:
