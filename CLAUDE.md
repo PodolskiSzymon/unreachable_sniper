@@ -1,5 +1,9 @@
 # Vinted Sniper – kontekst projektu (dla nowej rozmowy z Claude)
 
+> **Aktualny stan (2026-10-26) całego projektu – Sniper na serwerze z analizatorem, reguły zysku, wiele kategorii,
+> podobne oferty, pilot, lista niedoskonałości: `PodolskiSzymon/analyse_data` → `STAN_PROJEKTU.md` (gałąź
+> `claude/hopeful-faraday-n33quh`, tak jak tutaj). Ten plik niżej to historia i szczegóły Snipera.**
+
 Stan na 2026-10-02. MVP działa na komputerze użytkownika (Windows, Python 3.12, folder `C:\Users\Szymek\unreachable_sniper`, origin = github.com/PodolskiSzymon/unreachable_sniper; `F:\WEBSCRAPER` to INNY, stary projekt Sniperv2 z osobnym repo - nie mylić):
 wykrywa nowo dodane oferty w kategorii Vinted, sprawdza je, ocenia modelem AI (Gemini lub Claude) wg wytycznych
 użytkownika (`sniper/guidelines.md`) i wysyła mail o okazjach. Moduł AI dodany 2026-10-03 (użytkownik wybrał Gemini z Google AI Studio) – czeka na test u użytkownika.
