@@ -499,3 +499,67 @@ def test_cap_without_market_data(tmp_path):
     assert nomem["score"] == 9.0                                       # wiersz bez pojemności też się liczy
     lap = cap_without_market_data({"score": 9.0, "is_deal": True}, laptop(category="laptop", title="Dell XPS"), book, 7)
     assert lap["score"] == 9.0                                         # laptopy mają też guidelines.md
+
+
+def _comparables_db(path, rows):
+    """Ten sam układ co analyzer/comparables.py (FTS5 + vocab + meta)."""
+    import sqlite3
+    from sniper.guides import tokens
+    db = sqlite3.connect(path)
+    db.executescript("""
+        CREATE VIRTUAL TABLE offers USING fts5(words, category UNINDEXED, price UNINDEXED, gone UNINDEXED,
+                                               tokenize = 'unicode61 remove_diacritics 2');
+        CREATE VIRTUAL TABLE vocab USING fts5vocab(offers, 'row');
+        CREATE TABLE meta (key TEXT PRIMARY KEY, value TEXT);""")
+    db.executemany("INSERT INTO offers VALUES (?, ?, ?, ?)",
+                   [(" ".join(tokens(t)), c, p, g) for t, c, p, g in rows])
+    db.execute("INSERT INTO meta VALUES ('rows', ?)", (str(len(rows)),))
+    db.commit()
+    db.close()
+
+
+def _market_rows():
+    rows = []
+    for i in range(12):
+        rows.append((f"iPhone 13 128GB stan bdb telefon {i}", "phone", 1000 + 20 * i, 0))
+        rows.append((f"iPhone 13 128 GB czarny telefon", "phone", 1150 + 10 * i, 1))
+        rows.append((f"iPhone 13 Pro 128GB telefon", "phone", 2000 + 30 * i, 0))
+        rows.append((f"Nintendo Game Boy Color Pikachu", "console", 380 + 10 * i, 0))
+        rows.append((f"Nintendo Switch OLED", "console", 1000 + 10 * i, 0))
+    rows += [(f"Telefon Samsung sprawny {i}", "phone", 300, 0) for i in range(40)]
+    return rows
+
+
+def test_comparables_lookup(tmp_path):
+    from sniper.comparables import Comparables, describe
+    _comparables_db(tmp_path / "comparables.db", _market_rows())
+    comps = Comparables(tmp_path / "comparables.db")
+    iph = comps.lookup("phone", "iPhone 13 128GB niebieski")
+    assert iph and iph["n_active"] == 12 and iph["n_gone"] == 12                    # bez wersji Pro
+    assert 1100 <= iph["estimate"] <= 1250 and "13" in iph["words"]
+    pro = comps.lookup("phone", "iPhone 13 Pro 128 GB")
+    assert pro and pro["median"] > 2000
+    gbc = comps.lookup("console", "Nintendo Gameboy Color Pokemon")
+    assert gbc and 380 <= gbc["median"] <= 500                                     # „gameboy” = „game boy”
+    gbc2 = comps.lookup("console", "Game Boy Color Pokemon edition")
+    assert gbc2 and 380 <= gbc2["median"] <= 500 and gbc2["n_active"] == 12          # Switch nie miesza się
+    assert comps.lookup("phone", "Xiaomi Redmi Note 99") is None                     # brak podobnych
+    assert comps.lookup("laptop", "iPhone 13 128GB") is None                         # inna kategoria
+    assert "<porownywalne>" in describe(iph) and "mediana" in describe(iph)
+    assert Comparables(tmp_path / "brak.db").lookup("phone", "iPhone 13") is None
+
+
+def test_comparables_cap_ai_value_in_evaluation(tmp_path):
+    """Game Boy z AI wycenionym na 850 zł, a podobne oferty ~420 zł → zysk od wartości z danych, nie okazja."""
+    (tmp_path / "guides").mkdir()
+    _comparables_db(tmp_path / "guides" / "comparables.db", _market_rows())
+    (tmp_path / "guides" / "console.md").write_text("# Konsole\n", encoding="utf-8")
+    deal = {**EVAL_DEAL, "score": 9, "market_value_pln": 850, "gpu_model": None, "laptop_model": "Game Boy Color"}
+    client = FakeClient(response(deal))
+    evaluator = OfferEvaluator(ai_cfg(tmp_path, comparable_factor=1.2), FakeNotifier(), client=client)
+    gb = phone(category="console", title="Game Boy Color Pokemon", price=434.54, total_price=440.0)
+    record = run(evaluator.evaluate(gb))
+    ev = record["evaluation"]
+    assert ev["market_value_ai"] == 850 and ev["market_value_pln"] < 650
+    assert ev["is_deal"] is False and ev["score"] <= 6 and ev["comparables"]["n_active"] == 12
+    assert "<porownywalne>" in client.calls[0]["messages"][0]["content"][-1]["text"]

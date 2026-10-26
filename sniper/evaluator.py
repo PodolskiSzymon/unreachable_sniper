@@ -324,11 +324,20 @@ def rule_max_buy(sale, cfg):
     return round(buy) if buy > 0 else 0
 
 
-def enforce_profit_rule(evaluation, offer, cfg):
+def enforce_profit_rule(evaluation, offer, cfg, comps=None):
     """Program przelicza zysk, marżę i max zakup z wartości rynkowej AI i prawdziwego kosztu zakupu; okazja łamiąca
-    regułę traci status okazji (ocena najwyżej 6) - AI nie może jej przepuścić."""
+    regułę traci status okazji (ocena najwyżej 6) - AI nie może jej przepuścić. Z podobnymi ofertami z bazy wartość
+    AI jest przycinana do szacunku z danych × SNIPER_AI_COMPARABLE_FACTOR (domyślnie 1,2)."""
     from .extractor import purchase_cost
     value, cost = evaluation.get("market_value_pln"), purchase_cost(offer)
+    factor = getattr(cfg, "comparable_factor", 1.2)
+    if value and comps and comps.get("estimate") and factor and value > comps["estimate"] * factor:
+        capped = round(comps["estimate"] * factor)
+        evaluation.setdefault("red_flags", []).append(
+            f"Program: wycena AI {value:.0f} zł > dane rynku (szacunek {comps['estimate']:.0f} zł z "
+            f"{comps['n_active'] + comps['n_gone']} podobnych ofert) - zysk liczony od {capped} zł")
+        evaluation["market_value_ai"] = value
+        evaluation["market_value_pln"] = value = capped
     if not value or cost is None:
         if evaluation.get("is_deal"):
             evaluation.update(is_deal=False, score=min(evaluation["score"], 6.0), rule_check="brak wyceny")
@@ -352,15 +361,15 @@ def enforce_profit_rule(evaluation, offer, cfg):
     return evaluation
 
 
-def cap_without_market_data(evaluation, offer, guides, cap):
+def cap_without_market_data(evaluation, offer, guides, cap, comps=None):
     """Oferta bez pasującego wiersza tabeli (ani ściśle, ani bez pojemności): cena sprzedaży to tylko domysł AI -
     ocena najwyżej `cap` (2026-10-26: Game Boy Color „re-shell” 9/10 przy wartości 850 zł wziętej z niczego).
     Laptopy bez limitu - mają też ręczne wytyczne użytkownika (guidelines.md)."""
     category = getattr(offer, "category", None)
     if not cap or category in (None, "laptop") or evaluation["score"] <= cap:
         return evaluation
-    if guides.match(category, offer.title) or guides.match(category, offer.title, relaxed=True):
-        return evaluation
+    if comps or guides.match(category, offer.title) or guides.match(category, offer.title, relaxed=True):
+        return evaluation                             # są dane: wiersz tabeli albo podobne oferty z bazy
     evaluation["score_ai"] = evaluation.get("score_ai", evaluation["score"])
     evaluation["score"] = float(cap)
     evaluation.setdefault("red_flags", []).append(
@@ -773,6 +782,10 @@ class OfferEvaluator:
         self.guidelines = Guidelines(cfg.guidelines_file)
         # Wytyczne per kategoria (guides/<kategoria>.md) + tabela cen do bramki i karty rynku.
         self.guides = GuideBook(getattr(cfg, "guides_dir", None), cfg.guidelines_file)
+        # Podobne oferty z bazy analizatora (comparables.db) - mediana zamiast zgadywania ceny przez AI.
+        from .comparables import Comparables
+        guides_dir = getattr(cfg, "guides_dir", None)
+        self.comparables = Comparables(Path(guides_dir) / "comparables.db" if guides_dir else None)
         # AutoBuyer (sniper/autobuy.py) albo None. Okazję do kupienia przejmuje on i sam wysyła mail z wynikiem.
         self.buyer = None
         # Podgląd ocen w przeglądarce: logs/oceny.html (sniper/report.py).
@@ -941,8 +954,10 @@ class OfferEvaluator:
         """Ocena jednej oferty. Nigdy nie rzuca - błąd = rekord ze statusem 'nieoceniona'."""
         started = time.monotonic()
         async with self._slots:
+            comps = self.comparables.lookup(getattr(offer, "category", None), offer.title) \
+                if getattr(self, "comparables", None) else None
             try:
-                evaluation, usage, attempts, photos = await self._call_model(offer)
+                evaluation, usage, attempts, photos = await self._call_model(offer, comps)
             except Exception as exc:
                 self._count("failed")
                 error = _describe(exc, self.backend)
@@ -950,8 +965,10 @@ class OfferEvaluator:
                 return self._record(offer, STATUS_FAILED, error=error,
                                     latency_s=round(time.monotonic() - started, 1))
         self._count("evaluated")
-        enforce_profit_rule(evaluation, offer, self.cfg)
-        cap_without_market_data(evaluation, offer, self.guides, getattr(self.cfg, "no_data_max_score", 7.0))
+        if comps:
+            evaluation["comparables"] = {k: comps[k] for k in ("n_active", "n_gone", "median", "estimate")}
+        enforce_profit_rule(evaluation, offer, self.cfg, comps)
+        cap_without_market_data(evaluation, offer, self.guides, getattr(self.cfg, "no_data_max_score", 7.0), comps)
         apply_pl_bonus(evaluation, offer, getattr(self.cfg, "pl_bonus", 0))
         log.info("[AI] %s | %s/10%s | %s | zysk ~%s zł%s | zdjęcia: wysłane %d, AI widzi %d | %s", offer.id,
                  f"{evaluation['score']:g}", " OKAZJA" if evaluation["is_deal"] else "",
@@ -967,10 +984,11 @@ class OfferEvaluator:
         return self._record(offer, STATUS_EVALUATED, evaluation=evaluation, usage=usage, attempts=attempts,
                             photos_sent=photos, latency_s=round(time.monotonic() - started, 1))
 
-    async def _call_model(self, offer):
+    async def _call_model(self, offer, comps=None):
+        from .comparables import describe
         category = getattr(offer, "category", None)
         guidelines = self.guides.text(category)
-        hint = market_card(self.guides.match(category, offer.title))
+        hint = market_card(self.guides.match(category, offer.title)) + describe(comps)
         with_photos = True
         attempt = 0
         while True:

@@ -28,7 +28,7 @@ _NOISE = {"gb", "tb", "ram", "zintegrowana", "grafika", "laptop", "pc", "intel",
 
 
 # Skróty z tytułów → nazwy jak w tabelach analizatora („PS5 Slim” → playstation 5 slim).
-_ALIASES = ((re.compile(r"\bps\s?([345])\b"), r"playstation \1"),)
+_ALIASES = ((re.compile(r"\bps\s?([345])\b"), r"playstation \1"), (re.compile(r"\bgameboy\b"), "game boy"))
 
 
 def tokens(text):

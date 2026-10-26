@@ -270,6 +270,8 @@ class AiConfig:
     rule_costs: float = _env_float("SNIPER_RULE_COSTS", 46.0)                  # Podbicie 26 + wysyłka 20
     # Ocena najwyżej tyle, gdy modelu nie ma w tabeli cen z analizatora (cena sprzedaży = domysł AI). 0 = bez limitu.
     no_data_max_score: float = _env_float("SNIPER_AI_NO_DATA_MAX_SCORE", 7.0)
+    # Wycena AI najwyżej tyle × szacunek z podobnych ofert z bazy (comparables.db). 0 = bez przycinania.
+    comparable_factor: float = _env_float("SNIPER_AI_COMPARABLE_FACTOR", 1.2)
 
     # Mail tylko gdy ocena >= min_score; notify_all=true -> mail o każdej ofercie (z oceną albo bez).
     min_score: float = _env_float("SNIPER_AI_MIN_SCORE", 7.0)
