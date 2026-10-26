@@ -100,7 +100,8 @@ minimalnego zysku z wytycznych (albo, gdy wytyczne jej nie mają, cena łączna 
 z zasad dodatkowych). max_buy_price_pln = najwyższa cena łączna spełniająca regułę. Uwzględnij kraj sprzedawcy, \
 jeśli wytyczne coś o nim mówią.
 4. Obejrzyj zdjęcia: pęknięty lub wyraźnie uszkodzony ekran, uszkodzona obudowa / zawiasy / złącza, brak ładowarki \
-(laptop), zdjęcia stockowe albo z internetu zamiast prawdziwych, ekran blokady (BIOS, iCloud, konto Google / \
+(laptop, konsola przenośna, tablet - gdy nie ma jej na zdjęciach ani w opisie, odejmij koszt zamiennika ~20-60 zł \
+od market_value_pln i wpisz to w test_needs), zdjęcia stockowe albo z internetu zamiast prawdziwych, ekran blokady (BIOS, iCloud, konto Google / \
 Microsoft, MDM). Kurz, włosy, odciski palców, smugi i odbicia światła to NIE rysy ani uszkodzenia - w razie \
 wątpliwości traktuj je jako zabrudzenie. W photos_seen i photo_notes podaj zgodnie z prawdą, ile zdjęć widzisz \
 i co na nich jest - nie zgaduj.

@@ -77,8 +77,11 @@ def ai_lines(ai):
     if ai["status"] != "oceniona":
         return [("Błąd AI", f"{ai.get('error') or '?'} - oceń ofertę samodzielnie")]
     ev = ai["evaluation"]
-    return [
-        ("Karta", ev.get("gpu_model") or "nie dotyczy / nie rozpoznano"),
+    category = (ai.get("offer") or {}).get("category")
+    rows = []
+    if ev.get("gpu_model") or category in (None, "laptop", "gpu"):   # karta tylko tam, gdzie ma sens
+        rows.append(("Karta", ev.get("gpu_model") or "nie rozpoznano"))
+    return rows + [
         ("Model", ev.get("laptop_model") or "?"),
         ("Wartość rynkowa", _pln(ev.get("market_value_pln"))),
         ("Maks. cena zakupu", _pln(ev.get("max_buy_price_pln"))),

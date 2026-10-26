@@ -331,3 +331,18 @@ def test_scout_skips_disabled_catalogs():
                       categories=("phone", "gpu"))
     scout = Scout(cfg, VintedSession(), EmailNotifier(SmtpConfig()))
     assert sorted({scout.next_spec().catalog_id for _ in range(4)}) == [3582, 3661]
+
+
+def test_handheld_console_kit_and_mail_rows():
+    from sniper.categories import test_kit
+    from sniper.notifier import ai_lines
+    assert test_kit("console", "Nintendo DS lite").startswith("nic - ładowarka")
+    assert test_kit("console", "Nintendo 3DS XL") .startswith("nic - ładowarka")
+    assert test_kit("console", "Nintendo Switch OLED").startswith("nic w trybie przenośnym")
+    assert test_kit("console", "PlayStation 5 Slim").startswith("telewizor")
+    ai = {"status": "oceniona", "photos_sent": 6, "offer": {"category": "console", "title": "DS Lite"},
+          "evaluation": {"score": 5, "laptop_model": "Nintendo DS lite", "red_flags": []}}
+    labels = [k for k, _ in ai_lines(ai)]
+    assert "Karta" not in labels and "Model" in labels
+    ai["offer"]["category"] = "laptop"
+    assert "Karta" in [k for k, _ in ai_lines(ai)]

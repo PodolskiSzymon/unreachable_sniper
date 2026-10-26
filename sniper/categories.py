@@ -240,6 +240,15 @@ def _have():
     return {x.strip().lower() for x in os.getenv("SNIPER_TEST_HAVE", "").split(",") if x.strip()}
 
 
+# Konsole przenośne mają własny ekran - telewizor niepotrzebny (Switch: tylko do sprawdzenia stacji dokującej).
+_HANDHELD = re.compile(r"\b(?:ds\s?lite|dsi|nds|nintendo ds|[23]ds|switch\s?lite|psp|vita|game\s?boy|gba|"
+                       r"steam\s?deck|rog\s?ally|legion\s?go|playstation portal)\b", re.I)
+HANDHELD_KIT = ("nic - ładowarka (DS / 3DS / PSP: oryginalna, często brak w zestawie); sprawdź oba ekrany i dotyk, "
+                "zawiasy, przyciski, baterię, slot na gry")
+SWITCH_KIT = ("nic w trybie przenośnym; telewizor HDMI tylko do sprawdzenia stacji; Joy-Cony: kalibracja gałek "
+              "(dryf), ładowarka USB-C")
+
+
 def test_kit(category, title=""):
     """Krótki opis sprzętu do testu (do powiadomienia) albo None. Z SNIPER_TEST_HAVE: „⚠ BRAK SPRZĘTU: …”, gdy
     potrzebnego sprzętu nie masz, albo „✓ masz sprzęt” na początku."""
@@ -256,6 +265,10 @@ def test_kit(category, title=""):
         nvme = bool(re.search(r"nvme|m\.2|m2\b|pcie", text))
         kit = ("gniazdo M.2 na płycie albo obudowa M.2 NVMe → USB-C" if nvme else "przejściówka SATA → USB") + \
             "; CrystalDiskInfo (stan, godziny, zapisane TB) + h2testw (prawdziwa pojemność)"
+    elif category == "console" and _HANDHELD.search(text):
+        kit = HANDHELD_KIT
+    elif category == "console" and re.search(r"\bswitch\b", text):
+        kit = SWITCH_KIT
     else:
         kit = TEST_KITS.get(category)
     need, have = test_requirement(category, title), _have()
