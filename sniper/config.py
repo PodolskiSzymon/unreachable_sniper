@@ -304,6 +304,12 @@ class AiConfig:
 MODEL_PRICES = {
     "gemini-3.8-flash": (0.75, 3.75),
     "gemini-3.7-flash": (0.75, 3.75),
+    # Tańsze (ceny z zestawień 2026-10, sprawdź na ai.google.dev/pricing): bez wpisu koszt = 0 i dzienny limit
+    # SNIPER_AI_DAILY_LIMIT_USD by nie działał.
+    "gemini-3-flash": (0.50, 3.00),
+    "gemini-3.1-flash-lite": (0.25, 1.50),
+    "gemini-3.5-flash-lite": (0.30, 2.50),
+    "gemini-2.5-flash": (0.30, 2.50),
     "claude-opus-5-5": (4.0, 20.0),
     "claude-sonnet-5-5": (2.0, 10.0),
     "claude-haiku-4-5": (1.0, 5.0),
