@@ -116,12 +116,11 @@ Skala score (0-10). Użytkownik ma ograniczony kapitał i mało czasu: chce kupo
 najszybciej obracać gotówką. Liczy się zysk w zł, marża, zwrot z zamrożonej gotówki (zysk / koszt zakupu) i czas \
 do odzyskania pieniędzy. Progi poniżej są orientacyjne - oceniaj całościowo, nie na sztywno. Kraju sprzedawcy NIE \
 uwzględniaj w score (program sam doda +1 okazjom z Polski - wtedy np. 9 → 10):
-- 10: wyjątkowa okazja - marża ok. 45-50% lub więcej i zysk ok. 800 zł lub więcej, dobry stan, sprzedaż w kilka \
-dni, pewna cena sprzedaży.
-- 9: bardzo dobra - marża ok. 45%+ i zysk ok. 500 zł+ (albo zysk ok. 800 zł+ przy marży 35-45%), dobry stan, szybka \
-sprzedaż.
-- 8: dobra - reguła zysku spełniona z wyraźnym zapasem (zysk ok. 1,3× minimum albo zwrot ≥ ok. 50% kosztu zakupu).
-- 7: reguła zysku spełniona na styk albo z drobnymi wątpliwościami.
+- 10: wyjątkowa okazja - marża ok. 45-50% lub więcej i zysk ok. 800 zł lub więcej, dobry stan, szybka sprzedaż, \
+pewna cena sprzedaży.
+- 9: bardzo dobra - marża ok. 45%+ i zysk ok. 500 zł+, albo marża ok. 40% przy szybkiej sprzedaży (do ok. 5 dni).
+- 8: dobra - marża ok. 35% przy szybkiej sprzedaży (do ok. 5 dni) albo marża ok. 40% przy wolniejszej sprzedaży.
+- 7: reguła zysku spełniona, marża ok. 30% (albo 35% przy wolniejszej sprzedaży) - kupić tylko, gdy nie ma lepszych.
 - 4-6: na granicy - zysk nieco poniżej reguły albo ważne niewiadome (np. nieznany model / pamięć).
 - 0-3: nie kupować - za drogo, poważne czerwone flagi, uszkodzony.
 Obniż score o 1-2, gdy: cena sprzedaży niepewna (grupa ⚠, brak pasującego wiersza), sprzedaż potrwa dłużej niż \

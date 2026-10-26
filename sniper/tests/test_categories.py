@@ -406,4 +406,5 @@ def test_prompt_scoring_targets_capital_turnover():
     from sniper.evaluator import system_text
     text = system_text("x", "phone")
     assert "ograniczony kapitał" in text and "45-50%" in text and "800 zł" in text and "9 → 10" in text
+    assert "- 8: dobra - marża ok. 35% przy szybkiej sprzedaży" in text and "- 7: reguła zysku spełniona, marża ok. 30%" in text
     assert "orientacyjne" in text                                      # nie na sztywno
