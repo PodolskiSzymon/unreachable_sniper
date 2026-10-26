@@ -51,7 +51,7 @@ def ai_cfg(tmp_path, **kw):
 
 
 EVAL_DEAL = {"is_deal": True, "score": 8, "gpu_model": "RTX 4060", "laptop_model": "Legion 5",
-             "market_value_pln": 3100, "max_buy_price_pln": 1950, "potential_profit_pln": 1235,
+             "market_value_pln": 3100, "max_buy_price_pln": 1950, "potential_profit_pln": 1251,
              "reasoning": "RTX 4060 za 1715 zł łącznie, poniżej progu 1950 zł.", "red_flags": []}
 
 
@@ -230,7 +230,7 @@ def test_deal_is_mailed_and_saved(tmp_path):
     lines = (tmp_path / "evaluations.jsonl").read_text(encoding="utf-8").splitlines()
     record = json.loads(lines[0])
     assert record["offer"]["title"] == "Lenovo Legion 5 RTX 4060 16GB"
-    assert record["evaluation"]["potential_profit_pln"] == 1235 and record["notified"] is True
+    assert record["evaluation"]["potential_profit_pln"] == 1251 and record["notified"] is True
     assert record["photos_sent"] == 3 and record["usage"]["cache_read_input_tokens"] == 2500
 
     raw = (tmp_path / "evaluations.csv").read_bytes()
@@ -238,7 +238,7 @@ def test_deal_is_mailed_and_saved(tmp_path):
     rows = list(csv.reader(raw.decode("utf-8-sig").splitlines(), delimiter=";"))
     assert rows[0][:4] == ["czas", "status", "ocena", "okazja"]
     row = dict(zip(rows[0], rows[1]))
-    assert (row["ocena"], row["okazja"], row["mail"], row["karta"], row["zysk"]) == ("8", "TAK", "TAK", "RTX 4060", "1235")
+    assert (row["ocena"], row["okazja"], row["mail"], row["karta"], row["zysk"]) == ("8", "TAK", "TAK", "RTX 4060", "1251")
 
 
 def test_low_score_not_mailed_unless_notify_all(tmp_path):
@@ -371,7 +371,7 @@ def test_mail_contains_ai_verdict(tmp_path):
     text = msg.get_body(("plain",)).get_content()
     html = msg.get_body(("html",)).get_content()
     for body in (text, html):
-        assert "RTX 4060" in body and "1235 zł" in body and "brak ładowarki" in body and "poniżej progu" in body
+        assert "RTX 4060" in body and "1251 zł" in body and "brak ładowarki" in body and "poniżej progu" in body
 
     failed = build_message(laptop(), "a", "b", ai={"status": STATUS_FAILED, "error": "HTTP 529"})
     assert "NIEOCENIONA" in failed["Subject"] and "HTTP 529" in failed.get_body(("plain",)).get_content()

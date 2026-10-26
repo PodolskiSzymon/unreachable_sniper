@@ -261,6 +261,13 @@ class AiConfig:
     price_gate: float = _env_float("SNIPER_AI_PRICE_GATE", 1.25)
     # Premia do oceny okazji od sprzedawcy z Polski (krótsza dostawa = krócej zamrożona gotówka). 0 = wyłączona.
     pl_bonus: float = _env_float("SNIPER_AI_PL_BONUS", 1.0)
+    # Reguła zysku sprawdzana przez PROGRAM po ocenie AI (AI potrafi się pomylić - S25 2026-10-26: 9/10 przy 19% marży).
+    # Zysk = wartość rynkowa wg AI - koszt zakupu (z opłatą Vinted) - koszty sprzedaży; okazja tylko gdy marża ≥ min
+    # i zysk ≥ min (+ zł za każdy punkt marży poniżej 40%). Inaczej: nie okazja, ocena najwyżej 6.
+    rule_min_profit: float = _env_float("SNIPER_RULE_MIN_PROFIT", 300.0)
+    rule_min_margin: float = _env_float("SNIPER_RULE_MIN_MARGIN", 30.0)        # %
+    rule_per_point: float = _env_float("SNIPER_RULE_PER_POINT", 20.0)          # zł za punkt marży poniżej 40%
+    rule_costs: float = _env_float("SNIPER_RULE_COSTS", 46.0)                  # Podbicie 26 + wysyłka 20
 
     # Mail tylko gdy ocena >= min_score; notify_all=true -> mail o każdej ofercie (z oceną albo bez).
     min_score: float = _env_float("SNIPER_AI_MIN_SCORE", 7.0)

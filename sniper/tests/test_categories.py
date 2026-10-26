@@ -168,7 +168,7 @@ def test_phone_offer_uses_phone_guide_and_market_card(tmp_path):
     record = run(evaluator.evaluate(phone()))
     assert record["status"] == STATUS_EVALUATED
     ev = record["evaluation"]
-    assert (ev["margin_pct"], ev["sell_days_estimate"], ev["meets_profit_rule"]) == (38.0, 4, True)
+    assert (ev["margin_pct"], ev["sell_days_estimate"], ev["meets_profit_rule"]) == (74.2, 4, True)   # marżę liczy program: (3100 - 754,6 - 46) / 3100
     request = client.calls[0]
     system = request["system"][0]["text"]
     assert "kategoria: telefony" in system and "iPhone 13 Pro 128 GB" in system and "RTX 4060" not in system
@@ -176,7 +176,7 @@ def test_phone_offer_uses_phone_guide_and_market_card(tmp_path):
     assert "<karta_rynku>" in task and "| iPhone 13 128 GB |" in task and "Pro" not in task.split("<karta_rynku>")[1]
     evaluator.save(record)
     csv = (tmp_path / "evaluations.csv").read_text(encoding="utf-8-sig").splitlines()
-    assert "kategoria" in csv[0] and ";phone;" in csv[1] and ";38;4;" in csv[1]
+    assert "kategoria" in csv[0] and ";phone;" in csv[1] and ";74;4;" in csv[1]
 
 
 def test_gate_and_missing_guide_skip_ai(tmp_path):
@@ -462,3 +462,25 @@ def test_compare_lines(tmp_path):
     text = "\n".join(compare_lines(tmp_path, [new], "qwen/x"))
     assert "ta sama decyzja „okazja / nie” 0/1" in text and "INNA DECYZJA" in text and "8 → 4" in text
     assert "brak wcześniejszych" in compare_lines(tmp_path, [new], "gemini-3.8-flash")[0]
+
+
+def test_program_enforces_profit_rule(tmp_path):
+    """S25 2026-10-26: AI dało 9/10 OKAZJA przy koszcie 1 899 zł, wartości 2 394 zł (marża 19%) - program to blokuje."""
+    from sniper.evaluator import enforce_profit_rule, rule_max_buy
+    cfg = ai_cfg(tmp_path, rule_min_profit=300.0, rule_min_margin=30.0, rule_per_point=20.0, rule_costs=46.0)
+    s25 = phone(title="Galaxy S25 256GB", price=1805.0, total_price=1805.0)          # koszt z opłatą ~1 898 zł
+    ev = enforce_profit_rule({"score": 9.0, "is_deal": True, "market_value_pln": 2394.0}, s25, cfg)
+    assert ev["is_deal"] is False and ev["score"] == 6.0 and ev["score_ai"] == 9.0 and ev["rule_check"] == "naruszona"
+    assert ev["margin_pct"] == pytest.approx(18.8, abs=0.1) and "marża 19%" in ev["red_flags"][-1]
+    assert ev["max_buy_price_pln"] == rule_max_buy(2394.0, cfg) == 1630
+    ok = enforce_profit_rule({"score": 8.0, "is_deal": True, "market_value_pln": 2394.0},
+                             phone(price=1500.0, total_price=1500.0), cfg)               # koszt ~1 578 zł → 32%
+    assert ok["is_deal"] is True and ok["score"] == 8.0 and ok["meets_profit_rule"] is True
+    cheap = enforce_profit_rule({"score": 8.0, "is_deal": True, "market_value_pln": 700.0},
+                                phone(price=330.0, total_price=330.0), cfg)              # zysk ~304 zł przy 43%
+    assert cheap["is_deal"] is True
+    low = enforce_profit_rule({"score": 8.0, "is_deal": True, "market_value_pln": 700.0},
+                              phone(price=360.0, total_price=360.0), cfg)                # zysk ~273 zł < 300
+    assert low["is_deal"] is False
+    blind = enforce_profit_rule({"score": 8.0, "is_deal": True, "market_value_pln": None}, s25, cfg)
+    assert blind["is_deal"] is False and blind["rule_check"] == "brak wyceny"

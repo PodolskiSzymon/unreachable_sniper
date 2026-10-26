@@ -123,6 +123,8 @@ pewna cena sprzedaży.
 - 7: reguła zysku spełniona, marża ok. 30% (albo 35% przy wolniejszej sprzedaży) - kupić tylko, gdy nie ma lepszych.
 - 4-6: na granicy - zysk nieco poniżej reguły albo ważne niewiadome (np. nieznany model / pamięć).
 - 0-3: nie kupować - za drogo, poważne czerwone flagi, uszkodzony.
+Marża poniżej 30% albo zysk poniżej 300 zł to NIGDY okazja (is_deal = false, score ≤ 6), także przy drogim sprzęcie - \
+program i tak to sprawdzi i odrzuci.
 Obniż score o 1-2, gdy: cena sprzedaży niepewna (grupa ⚠, brak pasującego wiersza), sprzedaż potrwa dłużej niż \
 ok. tydzień, stan budzi wątpliwości, brakuje ładowarki / akcesoriów albo czeka Cię dużo pracy (czyszczenie, naprawa, \
 zdobywanie części).
@@ -297,6 +299,57 @@ def normalize_evaluation(text):
         "reasoning": str(data.get("reasoning") or ""),
         "red_flags": [str(f) for f in flags] if isinstance(flags, list) else [str(flags)],
     }
+
+
+def rule_required_profit(margin, cfg):
+    """Minimalny zysk przy danej marży (None = marża poniżej minimum)."""
+    min_margin = getattr(cfg, "rule_min_margin", 30.0) / 100
+    if margin < min_margin - 1e-9:
+        return None
+    base = getattr(cfg, "rule_min_profit", 300.0)
+    return base if margin >= 0.40 else base + getattr(cfg, "rule_per_point", 20.0) * 100 * (0.40 - margin)
+
+
+def rule_max_buy(sale, cfg):
+    """Najwyższy koszt zakupu spełniający regułę przy cenie sprzedaży `sale` (jak analyzer/guide.max_buy)."""
+    if not sale or sale <= 0:
+        return None
+    base, k = getattr(cfg, "rule_min_profit", 300.0), getattr(cfg, "rule_per_point", 20.0) * 100
+    min_margin = getattr(cfg, "rule_min_margin", 30.0) / 100
+    candidates = [max(0.4 * sale, base)]
+    p2 = max(min_margin * sale, base, (base + 0.4 * k) * sale / (sale + k))
+    if p2 < 0.4 * sale:
+        candidates.append(p2)
+    buy = sale - getattr(cfg, "rule_costs", 46.0) - min(candidates)
+    return round(buy) if buy > 0 else 0
+
+
+def enforce_profit_rule(evaluation, offer, cfg):
+    """Program przelicza zysk, marżę i max zakup z wartości rynkowej AI i prawdziwego kosztu zakupu; okazja łamiąca
+    regułę traci status okazji (ocena najwyżej 6) - AI nie może jej przepuścić."""
+    from .extractor import purchase_cost
+    value, cost = evaluation.get("market_value_pln"), purchase_cost(offer)
+    if not value or cost is None:
+        if evaluation.get("is_deal"):
+            evaluation.update(is_deal=False, score=min(evaluation["score"], 6.0), rule_check="brak wyceny")
+            evaluation.setdefault("red_flags", []).append("Program: brak wartości rynkowej - nie da się sprawdzić "
+                                                          "reguły zysku")
+        return evaluation
+    profit = value - cost - getattr(cfg, "rule_costs", 46.0)
+    margin = profit / value
+    required = rule_required_profit(margin, cfg)
+    meets = required is not None and profit >= required
+    evaluation.update(potential_profit_pln=round(profit), margin_pct=round(margin * 100, 1),
+                      max_buy_price_pln=rule_max_buy(value, cfg), meets_profit_rule=meets,
+                      rule_check="ok" if meets else "naruszona")
+    if evaluation.get("is_deal") and not meets:
+        evaluation["score_ai"] = evaluation["score"]
+        evaluation.update(is_deal=False, score=min(evaluation["score"], 6.0))
+        need = (f"min. {getattr(cfg, 'rule_min_margin', 30.0):g}% marży" if required is None
+                else f"przy tej marży min. {required:.0f} zł zysku")
+        evaluation.setdefault("red_flags", []).append(
+            f"Program: reguła zysku niespełniona - zysk {profit:.0f} zł, marża {margin * 100:.0f}% ({need})")
+    return evaluation
 
 
 def apply_pl_bonus(evaluation, offer, bonus):
@@ -880,6 +933,7 @@ class OfferEvaluator:
                 return self._record(offer, STATUS_FAILED, error=error,
                                     latency_s=round(time.monotonic() - started, 1))
         self._count("evaluated")
+        enforce_profit_rule(evaluation, offer, self.cfg)
         apply_pl_bonus(evaluation, offer, getattr(self.cfg, "pl_bonus", 0))
         log.info("[AI] %s | %s/10%s | %s | zysk ~%s zł%s | zdjęcia: wysłane %d, AI widzi %d | %s", offer.id,
                  f"{evaluation['score']:g}", " OKAZJA" if evaluation["is_deal"] else "",
