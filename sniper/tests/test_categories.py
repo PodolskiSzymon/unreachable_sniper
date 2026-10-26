@@ -400,3 +400,10 @@ def test_pl_bonus_only_for_polish_deals(tmp_path):
     assert record["evaluation"]["score"] == 8.0                         # laptop() ma sprzedawcę z PL
     system = client.calls[0]["system"][0]["text"]
     assert "premię za Polskę dolicza program" in system
+
+
+def test_prompt_scoring_targets_capital_turnover():
+    from sniper.evaluator import system_text
+    text = system_text("x", "phone")
+    assert "ograniczony kapitał" in text and "45-50%" in text and "800 zł" in text and "9 → 10" in text
+    assert "orientacyjne" in text                                      # nie na sztywno
