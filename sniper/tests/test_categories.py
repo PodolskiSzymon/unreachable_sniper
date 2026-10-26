@@ -484,3 +484,18 @@ def test_program_enforces_profit_rule(tmp_path):
     assert low["is_deal"] is False
     blind = enforce_profit_rule({"score": 8.0, "is_deal": True, "market_value_pln": None}, s25, cfg)
     assert blind["is_deal"] is False and blind["rule_check"] == "brak wyceny"
+
+
+def test_cap_without_market_data(tmp_path):
+    from sniper.evaluator import cap_without_market_data
+    guides(tmp_path)
+    book = GuideBook(tmp_path / "guides", tmp_path / "brak.md")
+    gbc = phone(category="phone", title="Nintendo Gameboy Color Pokemon")
+    ev = cap_without_market_data({"score": 9.0, "is_deal": True, "market_value_pln": 850}, gbc, book, 7)
+    assert ev["score"] == 7.0 and ev["score_ai"] == 9.0 and "brak tego modelu w danych rynku" in ev["red_flags"][-1]
+    known = cap_without_market_data({"score": 9.0, "is_deal": True}, phone(title="iPhone 13 128GB"), book, 7)
+    assert known["score"] == 9.0
+    nomem = cap_without_market_data({"score": 9.0, "is_deal": True}, phone(title="iPhone 13 stan bdb"), book, 7)
+    assert nomem["score"] == 9.0                                       # wiersz bez pojemności też się liczy
+    lap = cap_without_market_data({"score": 9.0, "is_deal": True}, laptop(category="laptop", title="Dell XPS"), book, 7)
+    assert lap["score"] == 9.0                                         # laptopy mają też guidelines.md

@@ -268,6 +268,8 @@ class AiConfig:
     rule_min_margin: float = _env_float("SNIPER_RULE_MIN_MARGIN", 30.0)        # %
     rule_per_point: float = _env_float("SNIPER_RULE_PER_POINT", 20.0)          # zł za punkt marży poniżej 40%
     rule_costs: float = _env_float("SNIPER_RULE_COSTS", 46.0)                  # Podbicie 26 + wysyłka 20
+    # Ocena najwyżej tyle, gdy modelu nie ma w tabeli cen z analizatora (cena sprzedaży = domysł AI). 0 = bez limitu.
+    no_data_max_score: float = _env_float("SNIPER_AI_NO_DATA_MAX_SCORE", 7.0)
 
     # Mail tylko gdy ocena >= min_score; notify_all=true -> mail o każdej ofercie (z oceną albo bez).
     min_score: float = _env_float("SNIPER_AI_MIN_SCORE", 7.0)
