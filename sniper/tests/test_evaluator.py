@@ -46,8 +46,7 @@ def ai_cfg(tmp_path, **kw):
                     notify_all=False, max_concurrent=2, timeout=5.0, retries=2, retry_delay=0.0,
                     price_min=None, price_max=9000.0, keywords=("rtx", "4060"), exclude_keywords=(),
                     keywords_in="title+description", guides_dir=str(tmp_path / "guides"), price_gate=1.25,
-                    category_keywords={}, category_exclude={}, pl_bonus=0.0, skip_seen=False,
-                    dataset_dir="off")
+                    category_keywords={}, category_exclude={}, pl_bonus=0.0, skip_seen=False)
     return replace(base, **kw)
 
 
@@ -463,7 +462,7 @@ def test_gemini_request_shape(tmp_path):
                                    [(PHOTOS[0], None), (PHOTOS[1], b"\x89PNG")])
     assert request["model"] == "gemini-3.8-flash"
     parts = request["contents"][0].parts
-    assert parts[0].text.startswith("Zdjęcia z ogłoszenia (2 z 9, numeracja od 1")
+    assert parts[0].text.startswith("Zdjęcia z ogłoszenia (2 z 9)")
     assert parts[1].file_data.file_uri == PHOTOS[0] and parts[1].file_data.mime_type == "image/webp"
     assert parts[2].inline_data.data == b"\x89PNG"
     assert "1715.00 PLN" in parts[-1].text
@@ -657,7 +656,7 @@ def test_csv_with_old_header_is_rotated(tmp_path):
     evaluator = OfferEvaluator(ai_cfg(tmp_path), FakeNotifier(), log_dir=tmp_path, client=FakeClient(response()))
     run(submit_and_wait(evaluator, laptop()))
     rows = list(csv.reader(old.read_text(encoding="utf-8-sig").splitlines(), delimiter=";"))
-    assert rows[0][-3:] == ["parametry", "w_zestawie", "ramki"] and len(rows) == 2
+    assert rows[0][-3:] == ["zdjecia_wyslane", "zdjecia_widziane", "co_na_zdjeciach"] and len(rows) == 2
     archived = [p for p in tmp_path.glob("evaluations.*.csv")]
     assert len(archived) == 1 and "2026-10-03;oceniona;1" in archived[0].read_text(encoding="utf-8-sig")
     run(submit_and_wait(evaluator, laptop(id=2)))      # ten sam nagłówek - dopisuje, bez rotacji

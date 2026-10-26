@@ -16,6 +16,3 @@ my_headers.txt
 
 # Wytyczne per kategoria i catalogs.json - generuje analizator rynku (analyse_data) na serwerze
 sniper/guides/
-
-# Zbiór zdjęć z ramkami do YOLO (SNIPER_DATASET_DIR) - dane, nie do repo
-sniper/dataset/

@@ -282,9 +282,6 @@ class AiConfig:
     # Ta sama oferta (ID) wraca do katalogu (podbicie, ponowne wystawienie) - bez ponownej oceny AI i maila, chyba
     # że cena spadła. Pamięć z logs/evaluations.jsonl, także po restarcie.
     skip_seen: bool = _env_bool("SNIPER_AI_SKIP_SEEN", True)
-    # Zbiór danych do YOLO (sniper/dataset.py): zdjęcia ocenionych ofert + ramki obiektów od AI. „off” = wyłączony.
-    dataset_dir: str = _env("SNIPER_DATASET_DIR") or str(Path(__file__).with_name("dataset"))
-    dataset_max_per_model: int = _env_int("SNIPER_DATASET_MAX_PER_MODEL", 30)
     # true = mail TYLKO o okazjach, które auto-zakup kupił / próbował kupić (zwykłe oferty i błędy AI bez maila).
     # Działa tylko przy włączonym auto-zakupie - bez niego maile idą jak zwykle, żeby nie zgubić okazji.
     mail_only_purchases: bool = _env_bool("SNIPER_MAIL_ONLY_PURCHASES", False)
