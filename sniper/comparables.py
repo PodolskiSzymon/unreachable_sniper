@@ -23,6 +23,11 @@ log = logging.getLogger("sniper.comparables")
 _ALL_VARIANTS = set().union(*VARIANT_WORDS.values()) | {"pro", "max", "plus", "ultra", "mini", "air", "slim",
                                                          "digital", "oled", "lite", "fe", "xl"}
 MAX_DF_SHARE = 0.20                # słowo w > 20% ofert = nic nie mówi („telefon”, „stan”)
+FAMILY_DF_SHARE = 0.5              # słowo rodziny w trybie „mediany” może być częste
+GENERIC = {"sprzedam", "sprzedaje", "nowy", "nowa", "nowe", "stan", "okazja", "telefon", "smartfon", "smartphone",
+           "konsola", "laptop", "notebook", "tablet", "karta", "sprawny", "sprawna", "uzywany", "używany", "pamiec",
+           "pamięć", "dysk", "zestaw", "komplet", "super", "idealny", "bdb", "jak", "the", "and", "with", "do", "na",
+           "z", "w", "i", "bez", "gratis", "gb", "tb"}
 WORD_SHARE = 0.6                   # ile znaczących słów musi mieć podobna oferta
 
 
@@ -99,6 +104,48 @@ class Comparables:
                 return found
         return None
 
+    def levels(self, category, title):
+        """Mediany od najbardziej szczegółowej do ogólnej (eksperyment „mediany”, sniper/experiment.py):
+        wszystkie liczby + warianty + słowa → pierwsza liczba → bez liczb → sama rodzina (najczęstsze znaczące słowo,
+        np. „ipad”). → lista statystyk jak lookup() + "label"; pusta, gdy brak pliku / danych."""
+        if not category or category == "skip":
+            return []
+        try:
+            db = self._db()
+            if db is None or not self._rows:
+                return []
+            words = list(dict.fromkeys(tokens(title)))
+            numbers = [w for w in words if w.isdigit()]
+            variants = [w for w in words if w in _ALL_VARIANTS]
+            limit = MAX_DF_SHARE * self._rows
+            df = {w: self._df(db, w) for w in words if not w.isdigit() and w not in _ALL_VARIANTS and len(w) >= 2}
+            informative = [w for w in df if 0 < df[w] <= limit]
+            absent = sorted(_ALL_VARIANTS - set(variants))
+            plans = [("model + liczby + wariant", numbers, variants, informative, absent),
+                     ("model + 1. liczba + wariant", numbers[:1], variants, informative, absent),
+                     ("model + wariant, bez liczb", [], variants, informative, absent)]
+            # Rodzina = pierwsze znaczące słowo tytułu (zwykle marka / linia: „iphone”, „apple”, „ps4”), także
+            # częste w bazie (do 50% ofert) - zapytanie i tak jest w obrębie kategorii.
+            family = next((w for w in df if 0 < df[w] <= FAMILY_DF_SHARE * self._rows and w not in GENERIC), None)
+            if family:
+                plans.append((f"cała rodzina „{family}”", [], [], [family], []))
+            out, seen = [], set()
+            for label, required, var, info, abs_ in plans:
+                if not required and not var and not info:
+                    continue
+                found = self._query(db, category, required, var, info, abs_)
+                if not found:
+                    continue
+                key = (found["n_active"], found["n_gone"], found["median"])
+                if key in seen:
+                    continue
+                seen.add(key)
+                out.append({**found, "label": label})
+            return out
+        except sqlite3.Error as exc:
+            log.warning("[AI] Porównywalne oferty niedostępne: %s", exc)
+            return []
+
     def _query(self, db, category, required, variants, informative, absent):
         must = [_q(w) for w in [*required, *variants]]
         parts = []
@@ -129,6 +176,18 @@ class Comparables:
         estimate = max(x for x in (gone_med, mid) if x is not None) if (gone_med or mid) else None
         return {"words": [*required, *variants, *informative], "n_active": len(active), "n_gone": len(gone),
                 "p25": p25, "median": med, "p75": p75, "gone_median": gone_med, "estimate": estimate}
+
+
+def describe_levels(levels):
+    """Tekst dla modelu (<mediany>) - kilka median od szczegółowej do ogólnej."""
+    if not levels:
+        return ("\n\n<mediany>\nBRAK podobnych ofert w bazie rynku (żadna mediana).\n</mediany>")
+    zl = lambda v: "-" if v is None else f"{v:,.0f}".replace(",", " ")  # noqa: E731
+    lines = [f"{i}. {lv['label']} (słowa: {' '.join(lv['words'])}): aktywnych {lv['n_active']} - p25 "
+             f"{zl(lv['p25'])}, mediana {zl(lv['median'])}, p75 {zl(lv['p75'])} zł; zniknęło {lv['n_gone']} "
+             f"(mediana {zl(lv['gone_median'])} zł); szacunek szybkiej sprzedaży ~{zl(lv['estimate'])} zł"
+             for i, lv in enumerate(levels, 1)]
+    return "\n\n<mediany>\n" + "\n".join(lines) + "\n</mediany>"
 
 
 def describe(found):

@@ -26,6 +26,7 @@ import json
 import logging
 import re
 import time
+from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -255,8 +256,8 @@ def market_card(rows):
     return "\n\n<karta_rynku>\n" + "\n".join(r.line for r in rows[:3]) + "\n</karta_rynku>"
 
 
-def _task_text(offer, hint=""):
-    return offer_text(offer) + hint + "\n\nOceń tę ofertę według wytycznych."
+def _task_text(offer, hint="", task=None):
+    return offer_text(offer) + hint + "\n\n" + (task or DEFAULT_TASK).instruction
 
 
 def system_text(guidelines, category=None):
@@ -299,6 +300,20 @@ def normalize_evaluation(text):
         "reasoning": str(data.get("reasoning") or ""),
         "red_flags": [str(f) for f in flags] if isinstance(flags, list) else [str(flags)],
     }
+
+
+@dataclass(frozen=True)
+class Task:
+    """Rodzaj zapytania do AI: schemat odpowiedzi, instrukcja systemowa, polecenie i normalizacja JSON-u.
+    Domyślnie zwykła ocena oferty; eksperymenty (sniper/experiment.py) podają własne."""
+    schema: dict
+    system: object                  # (wytyczne, kategoria) -> tekst
+    normalize: object               # tekst JSON -> słownik
+    instruction: str = "Oceń tę ofertę według wytycznych."
+
+
+DEFAULT_TASK = Task(EVALUATION_SCHEMA, lambda guidelines, category: system_text(guidelines, category),
+                    lambda text: normalize_evaluation(text))
 
 
 def rule_required_profit(margin, cfg):
@@ -402,24 +417,25 @@ def _usage(input_tokens=0, output_tokens=0, cache_creation=0, cache_read=0):
 
 
 # ---------------------------------------------------------------------------- Claude (Anthropic)
-def build_request(offer, cfg: AiConfig, guidelines, with_photos=True, hint=""):
+def build_request(offer, cfg: AiConfig, guidelines, with_photos=True, hint="", task=None):
     """Argumenty dla Anthropic client.beta.messages.create(...)."""
+    task = task or DEFAULT_TASK
     photos = offer.photo_urls[:max(cfg.max_photos, 0)] if with_photos else []
     content = []
     intro = _photo_intro(offer, photos)
     if intro:
         content.append({"type": "text", "text": intro})
     content += [{"type": "image", "source": {"type": "url", "url": url}} for url in photos]
-    content.append({"type": "text", "text": _task_text(offer, hint)})
+    content.append({"type": "text", "text": _task_text(offer, hint, task)})
 
-    output_config = {"format": {"type": "json_schema", "schema": EVALUATION_SCHEMA}}
+    output_config = {"format": {"type": "json_schema", "schema": task.schema}}
     if cfg.effort:
         output_config["effort"] = cfg.effort
     request = {
         "model": cfg.model,
         "max_tokens": cfg.max_tokens,
         # Stała część (instrukcja + wytyczne) w cache - kolejne oceny płacą za nią ~5% ceny.
-        "system": [{"type": "text", "text": system_text(guidelines, getattr(offer, "category", None)), "cache_control": {"type": "ephemeral"}}],
+        "system": [{"type": "text", "text": task.system(guidelines, getattr(offer, "category", None)), "cache_control": {"type": "ephemeral"}}],
         "messages": [{"role": "user", "content": content}],
         "output_config": output_config,
     }
@@ -430,14 +446,14 @@ def build_request(offer, cfg: AiConfig, guidelines, with_photos=True, hint=""):
     return request, len(photos)
 
 
-def parse_evaluation(response):
+def parse_evaluation(response, normalize=None):
     """Odpowiedź Anthropic -> słownik oceny. Rzuca EvaluationError / InvalidResponse."""
     if response.stop_reason == "refusal":
         details = getattr(response, "stop_details", None)
         raise EvaluationError(f"model odmówił oceny ({getattr(details, 'category', None) or 'bez kategorii'})")
     if response.stop_reason == "max_tokens":
         raise EvaluationError("odpowiedź ucięta (max_tokens) - zwiększ SNIPER_AI_MAX_TOKENS")
-    return normalize_evaluation(
+    return (normalize or normalize_evaluation)(
         "".join(block.text for block in response.content if getattr(block, "type", None) == "text"))
 
 
@@ -455,8 +471,8 @@ class AnthropicBackend:
         # max_retries=0: ponowienia liczymy sami (OfferEvaluator._call_model).
         self.client = client or anthropic.AsyncAnthropic(api_key=cfg.api_key, timeout=cfg.timeout, max_retries=0)
 
-    async def generate(self, offer, guidelines, with_photos, hint=""):
-        request, photos = build_request(offer, self.cfg, guidelines, with_photos, hint)
+    async def generate(self, offer, guidelines, with_photos, hint="", task=None):
+        request, photos = build_request(offer, self.cfg, guidelines, with_photos, hint, task)
         response = await self.client.beta.messages.create(**request)
         return response, usage_dict(response), photos
 
@@ -493,7 +509,7 @@ def image_mime(url):
     return next((mime for ext, mime in _MIME.items() if path.endswith(ext)), "image/jpeg")
 
 
-def build_gemini_request(offer, cfg: AiConfig, guidelines, images, hint=""):
+def build_gemini_request(offer, cfg: AiConfig, guidelines, images, hint="", task=None):
     """Argumenty dla client.aio.models.generate_content(...).
 
     images: lista (url, None) - Gemini pobiera zdjęcie sam z URL-a, albo (url, bajty) - pobrane przez nas.
@@ -508,11 +524,12 @@ def build_gemini_request(offer, cfg: AiConfig, guidelines, images, hint=""):
         mime = image_mime(url)
         parts.append(types.Part.from_bytes(data=data, mime_type=mime) if data is not None
                      else types.Part.from_uri(file_uri=url, mime_type=mime))
-    parts.append(types.Part.from_text(text=_task_text(offer, hint)))
+    task = task or DEFAULT_TASK
+    parts.append(types.Part.from_text(text=_task_text(offer, hint, task)))
     config = types.GenerateContentConfig(
-        system_instruction=system_text(guidelines, getattr(offer, "category", None)),
+        system_instruction=task.system(guidelines, getattr(offer, "category", None)),
         response_mime_type="application/json",
-        response_json_schema=EVALUATION_SCHEMA,
+        response_json_schema=task.schema,
         max_output_tokens=cfg.max_tokens,
         thinking_config=types.ThinkingConfig(thinking_level=cfg.effort.upper()) if cfg.effort else None,
         automatic_function_calling=types.AutomaticFunctionCallingConfig(disable=True),   # bez narzędzi
@@ -524,7 +541,7 @@ def _enum_name(value):
     return str(getattr(value, "name", value) or "")
 
 
-def parse_gemini(response):
+def parse_gemini(response, normalize=None):
     """Odpowiedź Gemini -> słownik oceny. Rzuca EvaluationError / InvalidResponse."""
     feedback = getattr(response, "prompt_feedback", None)
     if feedback is not None and getattr(feedback, "block_reason", None):
@@ -535,7 +552,7 @@ def parse_gemini(response):
         raise EvaluationError("odpowiedź ucięta (MAX_TOKENS) - zwiększ SNIPER_AI_MAX_TOKENS")
     if reason in ("SAFETY", "PROHIBITED_CONTENT", "BLOCKLIST", "SPII", "RECITATION", "IMAGE_SAFETY"):
         raise EvaluationError(f"model odmówił oceny ({reason})")
-    return normalize_evaluation(response.text)
+    return (normalize or normalize_evaluation)(response.text)
 
 
 def gemini_usage(response):
@@ -576,13 +593,13 @@ class GeminiBackend:
         results = await asyncio.gather(*(one(url) for url in urls))
         return [(url, data) for url, data in results if data is not None]
 
-    async def generate(self, offer, guidelines, with_photos, hint=""):
+    async def generate(self, offer, guidelines, with_photos, hint="", task=None):
         urls = offer.photo_urls[:max(self.cfg.max_photos, 0)] if with_photos else []
         if urls and self.cfg.photos == "download":
             images = await self._download(urls)
         else:
             images = [(url, None) for url in urls]
-        request = build_gemini_request(offer, self.cfg, guidelines, images, hint)
+        request = build_gemini_request(offer, self.cfg, guidelines, images, hint, task)
         response = await self.client.aio.models.generate_content(**request)
         return response, gemini_usage(response), len(images)
 
@@ -628,30 +645,32 @@ class ApiError(Exception):
         self.status, self.text = status, text
 
 
-def build_openai_request(offer, cfg: AiConfig, guidelines, with_photos=True, hint="", json_mode="schema"):
+def build_openai_request(offer, cfg: AiConfig, guidelines, with_photos=True, hint="", json_mode="schema",
+                         task=None):
     """Body dla POST {base_url}/chat/completions (OpenRouter i inne API zgodne z OpenAI)."""
+    spec = task or DEFAULT_TASK
     photos = offer.photo_urls[:max(cfg.max_photos, 0)] if with_photos else []
     content = []
     intro = _photo_intro(offer, photos)
     if intro:
         content.append({"type": "text", "text": intro})
     content += [{"type": "image_url", "image_url": {"url": url}} for url in photos]
-    task = _task_text(offer, hint)
+    task = _task_text(offer, hint, spec)
     if json_mode != "schema":
         # Model bez wsparcia schematu - opis pól w treści (normalize_evaluation i tak sprawdza JSON).
         task += ("\n\nOdpowiedz WYŁĄCZNIE obiektem JSON z polami: "
-                 + ", ".join(EVALUATION_SCHEMA["required"]) + ".")
+                 + ", ".join(spec.schema["required"]) + ".")
     content.append({"type": "text", "text": task})
     body = {
         "model": cfg.model,
         "max_tokens": cfg.max_tokens,
-        "messages": [{"role": "system", "content": system_text(guidelines, getattr(offer, "category", None))},
+        "messages": [{"role": "system", "content": spec.system(guidelines, getattr(offer, "category", None))},
                      {"role": "user", "content": content}],
         "usage": {"include": True},                      # OpenRouter: koszt w USD w odpowiedzi
     }
     if json_mode == "schema":
         body["response_format"] = {"type": "json_schema",
-                                   "json_schema": {"name": "evaluation", "strict": True, "schema": EVALUATION_SCHEMA}}
+                                   "json_schema": {"name": "evaluation", "strict": True, "schema": spec.schema}}
     elif json_mode == "object":
         body["response_format"] = {"type": "json_object"}
     if cfg.effort:
@@ -659,7 +678,7 @@ def build_openai_request(offer, cfg: AiConfig, guidelines, with_photos=True, hin
     return body, len(photos)
 
 
-def parse_openai(data):
+def parse_openai(data, normalize=None):
     """Odpowiedź /chat/completions → słownik oceny. Rzuca EvaluationError / InvalidResponse."""
     choices = data.get("choices") or []
     if not choices:
@@ -677,7 +696,7 @@ def parse_openai(data):
     if text.startswith("```"):                           # część modeli owija JSON w ```json … ```
         text = text.strip("`")
         text = text[text.find("{"):]
-    return normalize_evaluation(text)
+    return (normalize or normalize_evaluation)(text)
 
 
 def openai_usage(data):
@@ -697,8 +716,8 @@ class OpenAICompatBackend:
         # Model nie umie schematu JSON → kolejne zapytania w prostszym trybie (bez ponawiania tego samego błędu).
         self.json_mode = "schema"
 
-    async def generate(self, offer, guidelines, with_photos, hint=""):
-        body, photos = build_openai_request(offer, self.cfg, guidelines, with_photos, hint, self.json_mode)
+    async def generate(self, offer, guidelines, with_photos, hint="", task=None):
+        body, photos = build_openai_request(offer, self.cfg, guidelines, with_photos, hint, self.json_mode, task)
         headers = {"Authorization": f"Bearer {self.cfg.api_key}", "X-Title": "Vinted Sniper"}
         response = await self.client.post(self.cfg.base_url.rstrip("/") + "/chat/completions", json=body,
                                           headers=headers)
@@ -709,7 +728,7 @@ class OpenAICompatBackend:
                 self.json_mode = "object" if self.json_mode == "schema" else "prompt"
                 log.warning("[AI] %s nie obsługuje tego formatu JSON - przechodzę na tryb %s.", self.cfg.model,
                             self.json_mode)
-                return await self.generate(offer, guidelines, with_photos, hint)
+                return await self.generate(offer, guidelines, with_photos, hint, task)
             raise error
         data = response.json()
         return data, openai_usage(data), photos
@@ -1048,11 +1067,12 @@ class OfferEvaluator:
         return self._record(offer, STATUS_EVALUATED, evaluation=evaluation, usage=usage, attempts=attempts,
                             photos_sent=photos, latency_s=round(time.monotonic() - started, 1))
 
-    async def _call_model(self, offer, comps=None):
+    async def _call_model(self, offer, comps=None, hint=None, task=None):
         from .comparables import describe
         category = getattr(offer, "category", None)
         guidelines = self.guides.text(category)
-        hint = market_card(self.guides.match(category, offer.title)) + describe(comps)
+        if hint is None:
+            hint = market_card(self.guides.match(category, offer.title)) + describe(comps)
         with_photos = True
         attempt = 0
         while True:
@@ -1061,10 +1081,11 @@ class OfferEvaluator:
             try:
                 self._count("calls")
                 response, usage, photos = await asyncio.wait_for(
-                    self.backend.generate(offer, guidelines, with_photos, hint), self.cfg.timeout)
+                    self.backend.generate(offer, guidelines, with_photos, hint, task), self.cfg.timeout)
                 for key, value in usage.items():
                     self._count(key, value)
-                return self.backend.parse(response), usage, attempt, photos
+                return (self.backend.parse(response, task.normalize) if task else self.backend.parse(response),
+                        usage, attempt, photos)
             except Exception as exc:
                 if with_photos and self.backend.is_photo_error(exc):
                     # API nie przyjęło któregoś zdjęcia - ocena z samego tekstu.
