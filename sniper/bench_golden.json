@@ -1,0 +1,23 @@
+{
+ "_opis": "Złoty zbiór do python -m sniper.bench: oferty z ustaloną odpowiedzią. deal = czy to okazja wg reguły zysku (zysk >= 300 zł, marża >= 30-40%), sale = rozsądny zakres ceny sprzedaży (zł) z danych analizatora (comparables.db / summary.md 27.10). Ustalone 2026-10-27 z eksperymentu 6a (PLAN_OCENY.md §15). Dopisuj nowe oferty (id z linku Vinted), gdy wiesz, jak było naprawdę - najcenniejsze: okazje, które kupiłeś albo które sprzedały się w kilka minut, i fałszywe alarmy.",
+ "offers": {
+  "10545343627": {"deal": true, "sale": [1350, 1700], "why": "iPhone 14 Pro 128 GB za 850 zł, PL, 149 opinii, bateria 80%: dane 1 450-1 600 zł, zysk ~500 zł / 35%"},
+  "10544319640": {"deal": false, "sale": [2000, 2500], "why": "iPhone 16 za 800 zł, konto bez opinii - typowe oszustwo"},
+  "10545179797": {"deal": false, "sale": [2500, 3000], "why": "iPhone 16 Pro za 1 000 zł, konto bez opinii, 'TYLKO PRZEZ DHL I INPOST' - oszustwo"},
+  "10545307155": {"deal": false, "why": "replika iPhone 17 Pro Max (klon Android)"},
+  "10545270496": {"deal": false, "sale": [380, 550], "why": "Wii biała w pudełku 128 zł: mediana aktywnych ~450 zł, zysk < 300 zł (stary Sniper 10/10)"},
+  "10545325168": {"deal": false, "sale": [150, 480], "why": "Wii czarna bez kontrolera 100 zł: zysk < 300 zł (stary Sniper 9/10)"},
+  "10545366208": {"deal": false, "sale": [330, 520], "why": "Game Boy Color w nowej obudowie 435 zł: rynek ~450-500 zł (stary Sniper 9/10)"},
+  "10545299449": {"deal": false, "sale": [50, 200], "why": "iPad 2 za 125 zł - stary tablet, wart ~100-150 zł"},
+  "10545317721": {"deal": false, "why": "Xbox One S uszkodzony (wyłącza się co godzinę)"},
+  "10545381693": {"deal": false, "why": "Pixel 9 z blokadą"},
+  "10545377384": {"deal": false, "sale": [1350, 1700], "why": "iPhone 14 Pro 128 GB za 1 220 zł - za mały zysk"},
+  "10545329836": {"deal": false, "sale": [1400, 1750], "why": "iPhone 15 128 GB za 1 449 zł - po cenie rynkowej"},
+  "10545304370": {"deal": false, "sale": [2150, 2550], "why": "PS5 disc za 2 444 zł - po cenie rynkowej"},
+  "10545311783": {"deal": false, "why": "Steam Deck OLED 512 GB za 2 228 zł - po cenie rynkowej"},
+  "10545165482": {"deal": false, "sale": [700, 900], "why": "iPhone 13 128 GB za 580 zł, wg AI uszkodzony - zysk < 300 zł"},
+  "10545362636": {"deal": false, "sale": [450, 620], "why": "iPhone 12 64 GB za 267 zł - zysk < 300 zł"},
+  "10545357318": {"deal": false, "sale": [560, 680], "why": "Galaxy A17 128 GB za 600 zł - po cenie rynkowej"},
+  "10545255429": {"deal": false, "why": "iPhone 4 za 167 zł"}
+ }
+}

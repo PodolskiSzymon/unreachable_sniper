@@ -266,6 +266,10 @@ class AiConfig:
     # Tylko Gemini: url = Google pobiera zdjęcia sam; download = pobieramy je bezpośrednio (domowe IP, bez proxy)
     # i wysyłamy w zapytaniu.
     photos: str = _env("SNIPER_AI_PHOTOS", "url").lower()
+    # Tylko Gemini: rozdzielczość zdjęć dla modelu (low / medium / high; puste = domyślna modelu). Zdjęcia to większość
+    # tokenów wejścia (~1 100 na zdjęcie przy domyślnej, 27.10: ~13,6 tys. tokenów na ofertę) - porównaj jakość
+    # w `python -m sniper.bench` zanim zmienisz.
+    media_resolution: str = _env("SNIPER_AI_MEDIA_RESOLUTION").lower()
     guidelines_file: str = _env("SNIPER_AI_GUIDELINES") or str(Path(__file__).with_name("guidelines.md"))
     # Wytyczne per kategoria z analizatora: <folder>/<kategoria>.md (+ catalogs.json z zakresami cen).
     guides_dir: str = _env("SNIPER_GUIDES_DIR") or str(Path(__file__).with_name("guides"))
@@ -283,6 +287,10 @@ class AiConfig:
     rule_min_margin: float = _env_float("SNIPER_RULE_MIN_MARGIN", 30.0)        # %
     rule_per_point: float = _env_float("SNIPER_RULE_PER_POINT", 20.0)          # zł za punkt marży poniżej 40%
     rule_costs: float = _env_float("SNIPER_RULE_COSTS", 46.0)                  # Podbicie 26 + wysyłka 20
+    # Sposób oceny: zwykly (AI wycenia z karty rynku + podobnych ofert) albo mediany (AI dostaje kilka median z bazy,
+    # od szczegółowej do całej rodziny, i wycenia z nich; może poprawić model - sniper/experiment.py, eksperyment
+    # 27.10: 0 fałszywych okazji w złotym zbiorze). Laptopy zawsze zwykle (tabela kart graficznych + guidelines.md).
+    eval_mode: str = _env("SNIPER_EVAL_MODE", "zwykly").lower()
     # Ocena najwyżej tyle, gdy modelu nie ma w tabeli cen z analizatora (cena sprzedaży = domysł AI). 0 = bez limitu.
     no_data_max_score: float = _env_float("SNIPER_AI_NO_DATA_MAX_SCORE", 7.0)
     # Wycena AI najwyżej tyle × szacunek z podobnych ofert z bazy (comparables.db). 0 = bez przycinania.
@@ -304,7 +312,8 @@ class AiConfig:
     report_above: float = _env_float("SNIPER_AI_REPORT_ABOVE", 5.0)
 
     # Asynchronicznie: limit równoległych wywołań, limit czasu jednej próby, liczba ponowień.
-    max_concurrent: int = _env_int("SNIPER_AI_MAX_CONCURRENT", 3)
+    # 2026-10-27: 10 zamiast 3 (prośba użytkownika - eksperyment 50 ofert trwał ~4 min przy 3 naraz).
+    max_concurrent: int = _env_int("SNIPER_AI_MAX_CONCURRENT", 10)
     timeout: float = _env_float("SNIPER_AI_TIMEOUT", 120.0)
     retries: int = _env_int("SNIPER_AI_RETRIES", 2)
     retry_delay: float = _env_float("SNIPER_AI_RETRY_DELAY", 5.0)

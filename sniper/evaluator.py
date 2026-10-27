@@ -534,6 +534,8 @@ def build_gemini_request(offer, cfg: AiConfig, guidelines, images, hint="", task
         response_json_schema=task.schema,
         max_output_tokens=cfg.max_tokens,
         thinking_config=types.ThinkingConfig(thinking_level=cfg.effort.upper()) if cfg.effort else None,
+        media_resolution=(types.MediaResolution(f"MEDIA_RESOLUTION_{cfg.media_resolution.upper()}")
+                          if getattr(cfg, "media_resolution", "") and images else None),
         automatic_function_calling=types.AutomaticFunctionCallingConfig(disable=True),   # bez narzędzi
     )
     return {"model": cfg.model, "contents": [types.Content(role="user", parts=parts)], "config": config}
@@ -964,6 +966,11 @@ class OfferEvaluator:
                         f"{comps['estimate']:.0f} zł z {comps['n_active'] + comps['n_gone']} ofert)")
         return None
 
+    def uses_medians(self, offer):
+        """SNIPER_EVAL_MODE=mediany - poza laptopami (tam tabela kart graficznych i ręczne wytyczne)."""
+        return (getattr(self.cfg, "eval_mode", "zwykly") == "mediany"
+                and getattr(offer, "category", None) not in (None, "laptop"))
+
     def lookup_comparables(self, offer):
         cache = self.__dict__.setdefault("_comps_cache", {})
         if offer.id not in cache:
@@ -1039,10 +1046,21 @@ class OfferEvaluator:
     async def evaluate(self, offer):
         """Ocena jednej oferty. Nigdy nie rzuca - błąd = rekord ze statusem 'nieoceniona'."""
         started = time.monotonic()
+        medians = self.uses_medians(offer)
         async with self._slots:
             comps = self.lookup_comparables(offer)
+            levels = None
             try:
-                evaluation, usage, attempts, photos = await self._call_model(offer, comps)
+                if medians:
+                    from .comparables import describe_levels
+                    from .experiment import MEDIANS_TASK
+                    category = getattr(offer, "category", None)
+                    levels = self.comparables.levels(category, offer.title)
+                    hint = market_card(self.guides.match(category, offer.title)) + describe_levels(levels)
+                    evaluation, usage, attempts, photos = await self._call_model(offer, comps, hint=hint,
+                                                                                 task=MEDIANS_TASK)
+                else:
+                    evaluation, usage, attempts, photos = await self._call_model(offer, comps)
             except Exception as exc:
                 self._count("failed")
                 error = _describe(exc, self.backend)
@@ -1052,9 +1070,16 @@ class OfferEvaluator:
         self._count("evaluated")
         if comps:
             evaluation["comparables"] = {k: comps[k] for k in ("n_active", "n_gone", "median", "estimate")}
-        enforce_profit_rule(evaluation, offer, self.cfg, comps)
-        cap_without_market_data(evaluation, offer, self.guides, getattr(self.cfg, "no_data_max_score", 7.0), comps)
-        apply_pl_bonus(evaluation, offer, getattr(self.cfg, "pl_bonus", 0))
+        if medians:
+            from .experiment import finish_medians
+            evaluation["levels"] = [{k: lv[k] for k in ("label", "n_active", "n_gone", "median", "estimate")}
+                                    for lv in levels]
+            finish_medians(evaluation, offer, self.cfg, levels)
+        else:
+            enforce_profit_rule(evaluation, offer, self.cfg, comps)
+            cap_without_market_data(evaluation, offer, self.guides, getattr(self.cfg, "no_data_max_score", 7.0),
+                                    comps)
+            apply_pl_bonus(evaluation, offer, getattr(self.cfg, "pl_bonus", 0))
         log.info("[AI] %s | %s/10%s | %s | zysk ~%s zł%s | zdjęcia: wysłane %d, AI widzi %d | %s", offer.id,
                  f"{evaluation['score']:g}", " OKAZJA" if evaluation["is_deal"] else "",
                  evaluation["gpu_model"] or evaluation["laptop_model"] or "model ?",
