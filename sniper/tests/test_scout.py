@@ -128,7 +128,7 @@ def test_scout_end_to_end(monkeypatch):
         return httpx.Response(404)
 
     async def scenario():
-        cfg = ScoutConfig(smtp=SmtpConfig(username="", password=""))
+        cfg = ScoutConfig(smtp=SmtpConfig(username="", password=""), price_floor=0)   # oferta z atrapy < 300 zł
         session = VintedSession()
         session.client = httpx.AsyncClient(transport=httpx.MockTransport(handler), headers=session.client.headers)
         scout = Scout(cfg, session, EmailNotifier(cfg.smtp))
@@ -607,3 +607,24 @@ def test_light_browser_block_rules():
     assert not _should_block(req("https://www.vinted.pl/_next/static/app.js"))
     assert not _should_block(req("https://api.vinted.pl/svc-catalogue/items", "fetch"))
     assert not _should_block(req("https://js.datadome.co/tags.js"))
+
+
+def test_shipping_in_seller_currency_converted_to_pln():
+    """27.10: wysyłka 799 HUF była doliczana jak 799 zł (Xbox One S 328 zł → koszt 1 146 zł)."""
+    from sniper.extractor import Offer, purchase_cost, shipping_pln
+
+    def payload(amount, currency):
+        return {"shipping_details": {"price": {"amount": amount, "currency_code": currency}, "free_shipping": False}}
+
+    offer = build_offer(ACTIVE_ID, FIX["sidebar_active"], payload(799, "HUF"))
+    assert offer.shipping.price == 799 and offer.shipping.currency == "HUF"
+    assert offer.shipping.price_pln == round(799 * 0.0108, 2)
+    assert offer.total_price == round(261.08 + 8.63, 2)
+    assert purchase_cost(offer) < 300
+    assert shipping_pln(8.75, "RON") == round(8.75 * 0.84, 2) and shipping_pln(13.27, "PLN") == 13.27
+    assert shipping_pln(10, "XYZ") == 20.0 and shipping_pln(None, "EUR") is None
+    restored = Offer.from_dict(offer.to_dict())
+    assert restored.shipping.price_pln == offer.shipping.price_pln
+    old = offer.to_dict()
+    old["shipping"].pop("price_pln")                       # zapis sprzed zmiany (evaluations.jsonl)
+    assert Offer.from_dict(old).shipping.price_pln is None

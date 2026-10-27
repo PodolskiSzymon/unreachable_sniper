@@ -16,7 +16,8 @@ from pathlib import Path
 
 import httpx
 
-from .categories import AI_ENABLED_NAMES, CatalogSource, CatalogSpec, category_for, apply_weights, parse_weights, schedule, wanted_specs
+from .categories import (AI_ENABLED_NAMES, CatalogSource, CatalogSpec, apply_floor, apply_weights, category_for,
+                         parse_weights, schedule, wanted_specs)
 from .config import CATALOG_ONLY_HEADERS, CATALOG_URL, SHIPPING_URL, SIDEBAR_URL, ScoutConfig, get_catalog_params
 from .dedup import RecentIds
 from .extractor import build_offer, inactive_reason, item_url, unwrap_sidebar
@@ -87,7 +88,7 @@ class Scout:
         self._first_batch = cfg.skip_initial_batch
         self._stats = {"polls": 0, "errors": 0, "new": 0, "caught": 0, "last_size": 0}
         self._skipped = {}        # powód -> liczba (od ostatniego heartbeatu)
-        self._per_catalog = {}    # katalog -> [skany, nowe, wysłane do oceny] (od ostatniego heartbeatu)
+        self._per_catalog = {}    # katalog -> [skany, nowe, wysłane do oceny, pełne strony] (od ostatniego heartbeatu)
         self._top_items = []      # pierwsze oferty z ostatniego skanu, w kolejności Vinted
         self._last_heartbeat = time.monotonic()
 
@@ -106,7 +107,12 @@ class Scout:
             log.warning("[SCOUT] SNIPER_CATEGORIES=%s wyłącza wszystkie katalogi - skanuję wszystkie.",
                         ",".join(enabled))
             chosen = specs
-        return apply_weights(chosen, parse_weights(getattr(self.cfg, "catalog_weights", "")))
+        floored = apply_floor(chosen, getattr(self.cfg, "price_floor", None))
+        if floored != chosen and not getattr(self, "_floor_logged", False):
+            self._floor_logged = True
+            log.info("[SCOUT] Minimalna cena %s zł (SNIPER_PRICE_FLOOR) w katalogach: %s", self.cfg.price_floor,
+                     "; ".join(s.label for s in floored))
+        return apply_weights(floored, parse_weights(getattr(self.cfg, "catalog_weights", "")))
 
     def next_spec(self):
         if not self._cycle:
@@ -124,7 +130,7 @@ class Scout:
         self._stats["last_size"] = len(items)
         self._top_items = items[:5]
         self._top_label = spec.label
-        counts = self._per_catalog.setdefault(spec.label, [0, 0, 0])
+        counts = self._per_catalog.setdefault(spec.label, [0, 0, 0, 0])
         counts[0] += 1
         if not items:
             log.warning("[SCOUT] Pusty katalog (klucze odpowiedzi: %s) - możliwy soft-ban. Odświeżam sesję.",
@@ -142,6 +148,11 @@ class Scout:
 
         self._stats["new"] += len(fresh)
         counts[1] += len(fresh)
+        if len(fresh) == len(items) >= self.cfg.per_page:
+            # Cała strona to nowe oferty = od poprzedniego skanu mogło przyjść więcej, niż mieści strona.
+            counts[3] += 1
+            log.warning("[SCOUT] %s: cała strona (%d) to nowe oferty - część mogła umknąć; zwiększ SNIPER_PER_PAGE "
+                        "albo wagę katalogu (SNIPER_CATALOG_WEIGHTS).", spec.label, len(items))
         wanted = []
         for item in fresh:
             category = category_for(spec.catalog_id, item.get("title"), getattr(self.cfg, "categories", ()))
@@ -310,9 +321,9 @@ class Scout:
                  self.notifier.summary() if hasattr(self.notifier, "summary") else self.notifier.sent,
                  self.notifier.failed, s["last_size"])
         if self._per_catalog:
-            log.info("[SCOUT] Katalogi (skany / nowe / do oceny): %s", " | ".join(
-                f"{label.split(' ', 2)[0]} {label.split(' ', 2)[1]} {c[0]}/{c[1]}/{c[2]}"
-                for label, c in self._per_catalog.items()))
+            log.info("[SCOUT] Katalogi (skany / nowe / do oceny[ / pełne strony]): %s | strona %d ofert", " | ".join(
+                f"{label.split(' ', 2)[0]} {label.split(' ', 2)[1]} {c[0]}/{c[1]}/{c[2]}" + (f"/{c[3]}!" if c[3] else "")
+                for label, c in self._per_catalog.items()), self.cfg.per_page)
         if self._top_items:
             log.info("[SCOUT] Pierwsze oferty w ostatnio skanowanym katalogu %s (kolejność Vinted):",
                      getattr(self, "_top_label", ""))

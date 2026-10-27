@@ -92,6 +92,24 @@ def apply_weights(specs, weights):
     return out
 
 
+def apply_floor(specs, floor):
+    """Minimalna cena każdego katalogu (SNIPER_PRICE_FLOOR, domyślnie 300 zł) - prośba użytkownika 2026-10-27:
+    najczęściej dodawane tanie oferty (catalogs.json od 50-100 zł) to śmieci, a każda nowa oferta kosztuje szczegóły
+    przez proxy i często wywołanie AI. Przy regule zysku (≥ 300 zł, marża ≥ 30-40%) zakup poniżej 300 zł byłby okazją
+    tylko przy sprzedaży za ≥ ~650 zł, czyli cenie < ~45% wartości - to zwykle blokada albo oszustwo.
+    Katalog z `price_to` poniżej progu (świadomie tani zakres) zostaje bez zmian."""
+    floor = _to_float(floor)
+    if not floor or floor <= 0:
+        return list(specs)
+    out = []
+    for spec in specs:
+        low, high = _to_float(spec.price_from), _to_float(spec.price_to)
+        if (low is None or low < floor) and (high is None or high >= floor):
+            spec = replace(spec, price_from=_price(floor))
+        out.append(spec)
+    return out
+
+
 def wanted_specs(specs, enabled):
     """Katalogi z co najmniej jedną włączoną kategorią (SNIPER_CATEGORIES; puste = wszystkie). Katalog spoza listy
     (tryb jednego katalogu) zostaje zawsze."""
@@ -118,6 +136,13 @@ def category_for(catalog_id, title, enabled=None):
                 return category
         return "skip"
     return None
+
+
+def _to_float(value):
+    try:
+        return float(value) if value not in (None, "") else None
+    except (TypeError, ValueError):
+        return None
 
 
 def _price(value):

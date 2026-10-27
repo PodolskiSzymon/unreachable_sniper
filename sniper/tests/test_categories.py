@@ -235,7 +235,7 @@ def test_scout_rotates_catalogs_and_skips_other_parts():
     async def scenario():
         session = VintedSession()
         session.client = httpx.AsyncClient(transport=httpx.MockTransport(handler), headers=session.client.headers)
-        cfg = ScoutConfig(category="3580", catalogs="3580:250-6100*1, 3582:150-2700")
+        cfg = ScoutConfig(category="3580", catalogs="3580:250-6100*1, 3582:150-2700", price_floor=0)
         scout = Scout(cfg, session, EmailNotifier(SmtpConfig()))
         inspected = []
 
@@ -252,7 +252,7 @@ def test_scout_rotates_catalogs_and_skips_other_parts():
     assert requests == [("3580", "250", "6100"), ("3582", "150", "2700")] * 2
     assert inspected == [(2, 3580, "laptop"), (21, 3582, "storage")]      # kabel pominięty bez detali
     assert scout._skipped == {"inna kategoria": 1}
-    assert {k.split()[0]: v for k, v in scout._per_catalog.items()} == {"3580": [2, 1, 1], "3582": [2, 2, 1]}   # rozgrzewka nie liczy nowych
+    assert {k.split()[0]: v for k, v in scout._per_catalog.items()} == {"3580": [2, 1, 1, 0], "3582": [2, 2, 1, 0]}   # rozgrzewka nie liczy nowych
     assert scout.seen.maxlen >= 200                         # pamięć ID na 2 katalogi
 
 
@@ -604,3 +604,75 @@ def test_very_cheap_deal_gets_warning(tmp_path):
     ipad = phone(category="tablet", title="iPad A16 128GB", price=600.0, total_price=606.0)
     ev = enforce_profit_rule({"score": 10.0, "is_deal": True, "market_value_pln": 1847.0}, ipad, cfg)
     assert ev["is_deal"] is True and any("bardzo tanio" in f for f in ev["red_flags"])
+
+
+def test_price_floor_raises_cheap_catalogs():
+    from sniper.categories import apply_floor
+    specs = parse_catalogs("3580:200-7400*3, 3661:100-5400, 3728:500-3500, 3584:20-100, 3025")
+    out = apply_floor(specs, 300)
+    assert [(s.catalog_id, s.price_from, s.price_to, s.weight) for s in out] == [
+        (3580, "300", "7400", 3), (3661, "300", "5400", 0), (3728, "500", "3500", 0),
+        (3584, "20", "100", 0),                       # świadomie tani zakres (do < progu) - bez zmian
+        (3025, "300", "", 0)]
+    assert apply_floor(specs, 0) == specs and apply_floor(specs, None) == specs
+
+
+def test_scout_queries_with_price_floor():
+    requests = []
+
+    def handler(request):
+        requests.append((request.url.params["attribute_ids[catalog]"], request.url.params.get("price_from")))
+        return httpx.Response(200, json={"items": [{"id": len(requests), "title": "iPhone 13", "user": {}}]})
+
+    async def scenario():
+        session = VintedSession()
+        session.client = httpx.AsyncClient(transport=httpx.MockTransport(handler), headers=session.client.headers)
+        cfg = ScoutConfig(category="3580", catalogs="3661:100-5400, 3025:400-4300", price_floor=300)
+        scout = Scout(cfg, session, EmailNotifier(SmtpConfig()))
+        for _ in range(2):
+            await scout.poll_catalog()
+        await session.close()
+
+    asyncio.run(scenario())
+    assert requests == [("3661", "300"), ("3025", "400")]
+
+
+def test_full_page_of_new_offers_is_reported(caplog):
+    polls = {"n": 0}
+
+    def handler(request):
+        polls["n"] += 1
+        base = 100 * polls["n"]
+        return httpx.Response(200, json={"items": [{"id": base + i, "title": "iPhone", "user": {}} for i in range(2)]})
+
+    async def scenario():
+        session = VintedSession()
+        session.client = httpx.AsyncClient(transport=httpx.MockTransport(handler), headers=session.client.headers)
+        cfg = ScoutConfig(category="3661", catalogs="", per_page=2, price_floor=0)
+        scout = Scout(cfg, session, EmailNotifier(SmtpConfig()))
+
+        async def fake_inspect(item, spec, category):
+            return None
+        scout.inspect = fake_inspect
+        for _ in range(2):                                 # rozgrzewka + skan z samymi nowymi ofertami
+            await scout.poll_catalog()
+        await asyncio.gather(*scout._tasks)
+        await session.close()
+        return scout
+
+    scout = asyncio.run(scenario())
+    assert list(scout._per_catalog.values()) == [[2, 2, 2, 1]]
+    assert "cała strona (2) to nowe oferty" in caplog.text
+
+
+def test_tokens_foreign_letters_and_frequent_brand(tmp_path):
+    """27.10 na prawdziwej bazie: „Vând” → „v nd”, a „iphone” (25% ofert) wypadał ze słów → „iPhone 7” = każdy
+    telefon z „7” w tytule."""
+    from sniper.comparables import Comparables
+    assert tokens("Vând iPhone 17 Pro Max") == ["vând", "iphone", "17", "pro", "max"]
+    assert tokens("Säljer iPad6") == ["säljer", "ipad", "6"]
+    rows = [("iPhone 7 32GB", "phone", 350, 0)] * 10 + [("Xiaomi Redmi 7", "phone", 900, 0)] * 10
+    rows += [("iPhone 12", "phone", 600, 0)] * 10 + [("Samsung Galaxy", "phone", 500, 0)] * 60   # „iphone” w 22%
+    _comparables_db(tmp_path / "d.db", rows)
+    found = Comparables(tmp_path / "d.db").lookup("phone", "Vând iPhone 7")
+    assert found and found["median"] == 350 and "iphone" in found["words"] and "vând" not in found["words"]

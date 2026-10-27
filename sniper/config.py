@@ -85,6 +85,21 @@ BASE_URL = "https://www.vinted.pl"
 # = 5% + 2,90 zł). Wchodzi w koszt zakupu przy ocenie okazji, bramce ceny i powiadomieniach.
 BUYER_FEE_PCT = _env_float("SNIPER_BUYER_FEE_PCT", 5.0)
 BUYER_FEE_FIXED = _env_float("SNIPER_BUYER_FEE_FIXED", 2.90)
+
+# Kursy do przeliczenia wysyłki: shipping_details podaje cenę w walucie sprzedawcy (np. 799 HUF ≈ 9 zł), a była
+# doliczana jak złotówki - oferty z Węgier miały koszt zawyżony o ~790 zł (eksperyment 2026-10-27). Kursy
+# przybliżone (X 2026) - wysyłka to kilka-kilkanaście zł, więc błąd kursu jest pomijalny.
+# Nadpisanie / dodanie waluty: SNIPER_FX_RATES="EUR:4.25,HUF:0.0108".
+FX_TO_PLN = {"PLN": 1.0, "EUR": 4.25, "HUF": 0.0108, "RON": 0.84, "CZK": 0.17, "SEK": 0.39, "DKK": 0.57,
+             "GBP": 4.95, "USD": 3.70, "BGN": 2.17, "CHF": 4.55, "NOK": 0.37}
+for _part in _env("SNIPER_FX_RATES").split(","):
+    _code, _, _rate = _part.partition(":")
+    try:
+        FX_TO_PLN[_code.strip().upper()] = float(_rate)
+    except ValueError:
+        pass
+# Wysyłka w walucie spoza tabeli - przyjmujemy typową kwotę zamiast surowej liczby.
+UNKNOWN_SHIPPING_PLN = 20.0
 # Nowy endpoint katalogu (Vinted przeniósł listę z www.vinted.pl/api/v2/catalog/items)
 CATALOG_URL = "https://api.vinted.pl/svc-catalogue/items"
 SIDEBAR_URL = BASE_URL + "/api/v2/items/{item_id}/details/sidebar"
@@ -475,6 +490,9 @@ class ScoutConfig:
     # Jak często skanować kategorię względem innych: "laptop:3,phone:3" (waga 3 = 3× częściej niż waga 1).
     catalog_weights: str = _env("SNIPER_CATALOG_WEIGHTS")
     price_from: str = _env("SNIPER_PRICE_FROM", "100")   # minimalna cena w PLN (puste = bez filtra)
+    # Dolny próg ceny dla KAŻDEGO katalogu (także z catalogs.json / SNIPER_CATALOGS): price_from w zapytaniu nie
+    # niższe niż to. 0 = wyłączone. Domyślnie 300 zł (2026-10-27) - patrz categories.apply_floor.
+    price_floor: float = _env_float("SNIPER_PRICE_FLOOR", 300.0)
     price_to: str = _env("SNIPER_PRICE_TO")               # maksymalna cena w PLN (puste = bez filtra)
     # Ofert na jeden skan. svc-catalogue respektuje per_page (test check_per_page.py, 2026-10-02):
     # 96 ofert = ~39 KB transferu na skan, 20 ofert = ~9 KB. 20 to zapas ~1 h przy nowej ofercie co ~3 min.

@@ -35,7 +35,10 @@ def shipping_text(offer):
         return "darmowa"
     if ship.pickup_only:
         return "tylko odbiór osobisty"
-    return _fmt_money(ship.price, ship.currency or offer.currency)
+    text = _fmt_money(ship.price, ship.currency or offer.currency)
+    if ship.currency and ship.currency != "PLN" and getattr(ship, "price_pln", None) is not None:
+        text += f" (≈ {ship.price_pln:.2f} zł)"
+    return text
 
 
 def _seller_lines(offer):

@@ -217,6 +217,8 @@ def offer_text(offer):
         shipping = "tylko odbiór osobisty"
     else:
         shipping = _money(ship.price, ship.currency or offer.currency)
+        if ship.currency and ship.currency != "PLN" and ship.price_pln is not None:
+            shipping += f" (≈ {ship.price_pln:.2f} zł)"
     s = offer.seller
     seller = [
         f"nazwa: {s.name or '?'}",

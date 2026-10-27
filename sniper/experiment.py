@@ -29,6 +29,7 @@ log = logging.getLogger("sniper.experiment")
 
 DELTA = 0.08                         # rabat przy negocjacji („Zaproponuj cenę”) - PLAN_OCENY.md §4.3
 MIN_CONFIDENCE = 80
+CHEAP_SHARE = 0.45                   # koszt < 45% ceny sprzedaży = „bardzo tanio” (jak enforce_profit_rule)
 CONDITIONS = ["sprawny", "drobna_usterka", "uszkodzony", "na_czesci", "blokada", "nie_wiadomo"]
 
 # ---------------------------------------------------------------------------------------------- tryb „mediany”
@@ -74,6 +75,27 @@ MEDIANS_TASK = Task(MEDIANS_SCHEMA, lambda guidelines, category: system_text(gui
                     normalize_medians, "Oceń tę ofertę według wytycznych i median z bazy rynku.")
 
 
+def cheap_guard(ev, offer, cost, sale):
+    """Okazja za < 45% wartości (wynik 27.10: tryb „model” dał 10/10 iPhone'om 16 / 16 Pro za 800 / 1000 zł od kont
+    bez opinii - AI samo napisało „oszustwo” w red_flags, a program to pominął). Konto bez opinii → nie okazja;
+    inaczej ocena najwyżej 7 (do ręcznego sprawdzenia: blokada, usterka, zła identyfikacja albo zła wycena)."""
+    if not ev.get("is_deal") or not sale or cost is None or cost >= CHEAP_SHARE * sale:
+        return ev
+    seller = getattr(offer, "seller", None)
+    share = cost / sale * 100
+    ev["score_before_guard"] = ev["score"]
+    if seller is not None and getattr(seller, "feedback_count", None) == 0:
+        ev.update(is_deal=False, score=min(ev["score"], 3.0))
+        ev.setdefault("red_flags", []).append(
+            f"Program: {share:.0f}% wartości od konta bez opinii - typowy wzór oszustwa, nie okazja")
+    else:
+        ev["score"] = min(ev["score"], 7.0)
+        ev.setdefault("red_flags", []).append(
+            f"Program: bardzo tanio - {share:.0f}% wartości (blokada / usterka / oszustwo / zła wycena?) - ocena "
+            f"najwyżej 7, sprawdź ręcznie")
+    return ev
+
+
 def finish_medians(ev, offer, cfg, levels):
     """Program po AI: brak w medianach → nie okazja; reguła zysku i przycięcie do wybranej mediany; premia PL."""
     if not levels or not ev.get("in_medians"):
@@ -86,7 +108,8 @@ def finish_medians(ev, offer, cfg, levels):
     comps = levels[used - 1] if used and 1 <= used <= len(levels) else levels[0]
     enforce_profit_rule(ev, offer, cfg, comps)
     apply_pl_bonus(ev, offer, getattr(cfg, "pl_bonus", 0))
-    return ev
+    from .extractor import purchase_cost
+    return cheap_guard(ev, offer, purchase_cost(offer), ev.get("market_value_pln"))
 
 
 # ---------------------------------------------------------------------------------------------- tryb „model”
@@ -224,7 +247,7 @@ def finish_model(ev, offer, cfg, evaluator, delta=DELTA):
         extra = (best["sale"] - worst["sale"]) * (1 - delta)
         ev["upside"] = f"jeśli to {best['label']}, zarobisz ~{extra:.0f} zł więcej"
     apply_pl_bonus(ev, offer, getattr(cfg, "pl_bonus", 0))
-    return ev
+    return cheap_guard(ev, offer, cost, sale)
 
 
 # ---------------------------------------------------------------------------------------------- wspólne

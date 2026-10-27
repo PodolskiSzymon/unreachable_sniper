@@ -10,7 +10,7 @@ from dataclasses import asdict, dataclass, field
 from datetime import datetime, timezone
 from decimal import Decimal, InvalidOperation
 
-from .config import BASE_URL, BUYER_FEE_FIXED, BUYER_FEE_PCT
+from .config import BASE_URL, BUYER_FEE_FIXED, BUYER_FEE_PCT, FX_TO_PLN, UNKNOWN_SHIPPING_PLN
 
 
 @dataclass
@@ -33,6 +33,7 @@ class Shipping:
     pickup_only: bool
     multiple_options: bool
     discount: object = None
+    price_pln: float | None = None      # wysyłka w zł (price jest w walucie sprzedawcy - currency)
 
 
 @dataclass
@@ -140,14 +141,27 @@ def extract_shipping(payload):
     price = details.get("price") or {}
     free = bool(details.get("free_shipping"))
     amount = _money(price.get("amount"))
+    amount = 0.0 if free and amount is None else amount
+    currency = price.get("currency_code")
     return Shipping(
-        price=0.0 if free and amount is None else amount,
-        currency=price.get("currency_code"),
+        price=amount,
+        currency=currency,
         free_shipping=free,
         pickup_only=bool(details.get("pickup_only")),
         multiple_options=bool(details.get("multiple_shipping_options_available")),
         discount=details.get("discount"),
+        price_pln=shipping_pln(amount, currency),
     )
+
+
+def shipping_pln(amount, currency):
+    """Wysyłka w zł: kwota w walucie sprzedawcy × kurs (FX_TO_PLN); waluta nieznana → UNKNOWN_SHIPPING_PLN."""
+    if amount is None:
+        return None
+    code = (currency or "PLN").upper()
+    if code in FX_TO_PLN:
+        return round(amount * FX_TO_PLN[code], 2)
+    return UNKNOWN_SHIPPING_PLN
 
 
 def extract_seller(sidebar, catalog_item=None, user_profile=None):
@@ -196,8 +210,9 @@ def build_offer(item_id, sidebar, shipping_payload=None, catalog_item=None, user
 
     shipping = extract_shipping(shipping_payload)
     total = None
-    if price is not None and shipping and shipping.price is not None:
-        total = float(price + Decimal(str(shipping.price)))
+    ship = shipping and (shipping.price_pln if shipping.price_pln is not None else shipping.price)
+    if price is not None and ship is not None:
+        total = float(price + Decimal(str(ship)))
 
     brand = (sidebar.get("brand_dto") or {}).get("title") or catalog_item.get("brand_title")
 

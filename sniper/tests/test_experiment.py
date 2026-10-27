@@ -3,8 +3,8 @@ import json
 
 from sniper.comparables import Comparables, describe_levels
 from sniper.evaluator import OfferEvaluator, build_request
-from sniper.experiment import (MEDIANS_TASK, MODEL_TASK, finish_model, formula_score, last_evaluated, line,
-                               run_one)
+from sniper.experiment import (MEDIANS_TASK, MODEL_TASK, cheap_guard, finish_model, formula_score, last_evaluated,
+                               line, run_one)
 from sniper.tests.test_categories import _comparables_db, _market_rows, phone
 from sniper.tests.test_evaluator import EVAL_DEAL, FakeClient, FakeNotifier, ai_cfg, response, run
 
@@ -89,6 +89,19 @@ def test_model_mode_no_data_damage_and_rule(tmp_path):
                           phone(price=1000.0, total_price=1015.0), cfg, evaluator)
     assert pricey["is_deal"] is False and pricey["score"] <= 6
     assert formula_score(0.46, 900) == 10 and formula_score(0.46, 600) == 9 and formula_score(0.31, 600) == 7
+
+
+def test_cheap_guard_new_account_and_manual_check():
+    """27.10: iPhone 16 za 800 zł od konta bez opinii dostał 10/10 w trybie „model” - teraz nie okazja."""
+    from dataclasses import replace
+    offer = phone(price=800.0, total_price=800.0)
+    new_seller = replace(offer.seller, feedback_count=0)
+    ev = cheap_guard({"is_deal": True, "score": 10.0}, replace(offer, seller=new_seller), 842.9, 2085)
+    assert ev["is_deal"] is False and ev["score"] == 3.0 and "bez opinii" in ev["red_flags"][-1]
+    ev = cheap_guard({"is_deal": True, "score": 10.0}, offer, 842.9, 2085)          # konto z opiniami
+    assert ev["is_deal"] is True and ev["score"] == 7.0 and "sprawdź ręcznie" in ev["red_flags"][-1]
+    ev = cheap_guard({"is_deal": True, "score": 8.0}, offer, 901.3, 1457)            # iPhone 14 Pro: 62% - bez zmian
+    assert ev == {"is_deal": True, "score": 8.0}
 
 
 def test_default_task_unchanged():

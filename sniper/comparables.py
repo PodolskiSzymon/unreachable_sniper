@@ -22,12 +22,19 @@ log = logging.getLogger("sniper.comparables")
 
 _ALL_VARIANTS = set().union(*VARIANT_WORDS.values()) | {"pro", "max", "plus", "ultra", "mini", "air", "slim",
                                                          "digital", "oled", "lite", "fe", "xl"}
-MAX_DF_SHARE = 0.20                # słowo w > 20% ofert = nic nie mówi („telefon”, „stan”)
+# Słowo w > 35% ofert = nic nie mówi. Było 20%: „iphone” (25% całej bazy, 27.10) wypadał i „iPhone 7” szukał
+# każdego telefonu z „7” w tytule (mediana 834 zł zamiast ~340). Słowa ogólne odcina GENERIC.
+MAX_DF_SHARE = 0.35
 FAMILY_DF_SHARE = 0.5              # słowo rodziny w trybie „mediany” może być częste
 GENERIC = {"sprzedam", "sprzedaje", "nowy", "nowa", "nowe", "stan", "okazja", "telefon", "smartfon", "smartphone",
            "konsola", "laptop", "notebook", "tablet", "karta", "sprawny", "sprawna", "uzywany", "używany", "pamiec",
            "pamięć", "dysk", "zestaw", "komplet", "super", "idealny", "bdb", "jak", "the", "and", "with", "do", "na",
-           "z", "w", "i", "bez", "gratis", "gb", "tb"}
+           "z", "w", "i", "bez", "gratis", "gb",
+           # „sprzedam / na sprzedaż / telefon / konsola” w językach sprzedawców (tytuły RO/HU/SK/CZ/LT/SE/DE/HR, 27.10)
+           "vând", "vand", "vinde", "vanzare", "telefonul", "consola", "tableta", "eladó", "elado", "telefon",
+           "konzol", "konzola", "predám", "predam", "prodám", "prodam", "parduodu", "säljer", "saljer", "verkaufe",
+           "verkauf", "prodajem", "sell", "selling", "sale", "for", "en", "de", "si", "és", "es", "a", "na", "un",
+           "o", "cu", "mit", "und", "nou", "noi", "folii"}
 WORD_SHARE = 0.6                   # ile znaczących słów musi mieć podobna oferta
 
 
@@ -35,6 +42,13 @@ def _plain(word):
     """Jak tokenizer FTS5 (remove_diacritics): „łódź” → „lodz” - do słownika częstości."""
     word = word.replace("ł", "l")
     return "".join(c for c in unicodedata.normalize("NFKD", word) if not unicodedata.combining(c))
+
+
+_GENERIC_PLAIN = {_plain(w) for w in GENERIC}
+
+
+def _generic(word):
+    return word in GENERIC or _plain(word) in _GENERIC_PLAIN
 
 
 def _q(word):
@@ -94,7 +108,7 @@ class Comparables:
         variants = [w for w in words if w in _ALL_VARIANTS]
         limit = MAX_DF_SHARE * self._rows
         informative = [w for w in words if not w.isdigit() and w not in _ALL_VARIANTS and len(w) >= 2
-                       and 0 < self._df(db, w) <= limit]
+                       and not _generic(w) and 0 < self._df(db, w) <= limit]
         if not numbers and not informative:
             return None
         absent = sorted(_ALL_VARIANTS - set(variants))
@@ -118,7 +132,8 @@ class Comparables:
             numbers = [w for w in words if w.isdigit()]
             variants = [w for w in words if w in _ALL_VARIANTS]
             limit = MAX_DF_SHARE * self._rows
-            df = {w: self._df(db, w) for w in words if not w.isdigit() and w not in _ALL_VARIANTS and len(w) >= 2}
+            df = {w: self._df(db, w) for w in words if not w.isdigit() and w not in _ALL_VARIANTS and len(w) >= 2
+                  and not _generic(w)}
             informative = [w for w in df if 0 < df[w] <= limit]
             absent = sorted(_ALL_VARIANTS - set(variants))
             plans = [("model + liczby + wariant", numbers, variants, informative, absent),
@@ -126,7 +141,7 @@ class Comparables:
                      ("model + wariant, bez liczb", [], variants, informative, absent)]
             # Rodzina = pierwsze znaczące słowo tytułu (zwykle marka / linia: „iphone”, „apple”, „ps4”), także
             # częste w bazie (do 50% ofert) - zapytanie i tak jest w obrębie kategorii.
-            family = next((w for w in df if 0 < df[w] <= FAMILY_DF_SHARE * self._rows and w not in GENERIC), None)
+            family = next((w for w in df if 0 < df[w] <= FAMILY_DF_SHARE * self._rows), None)
             if family:
                 plans.append((f"cała rodzina „{family}”", [], [], [family], []))
             out, seen = [], set()
