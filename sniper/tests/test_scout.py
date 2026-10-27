@@ -628,3 +628,17 @@ def test_shipping_in_seller_currency_converted_to_pln():
     old = offer.to_dict()
     old["shipping"].pop("price_pln")                       # zapis sprzed zmiany (evaluations.jsonl)
     assert Offer.from_dict(old).shipping.price_pln is None
+
+
+def test_seller_country_from_shipping_currency():
+    """Katalog i sidebar nie podają kraju - premia PL brała się z niczego (27.10: 50/50 ofert bez kraju)."""
+    def payload(currency):
+        return {"shipping_details": {"price": {"amount": 10, "currency_code": currency}, "free_shipping": False}}
+
+    sidebar = {**FIX["sidebar_active"]}
+    offer = build_offer(ACTIVE_ID, sidebar, payload("PLN"), {"id": ACTIVE_ID, "user": {}})
+    assert offer.seller.country_code == "PL" and offer.seller.country == "Polska (wg waluty wysyłki)"
+    assert build_offer(ACTIVE_ID, sidebar, payload("HUF"), {"id": ACTIVE_ID, "user": {}}).seller.country_code == "HU"
+    assert build_offer(ACTIVE_ID, sidebar, payload("EUR"), {"id": ACTIVE_ID, "user": {}}).seller.country_code is None
+    known = build_offer(ACTIVE_ID, sidebar, payload("PLN"), {"id": ACTIVE_ID, "user": {"country_iso_code": "LT"}})
+    assert known.seller.country_code == "LT"                       # podany przez API zostaje

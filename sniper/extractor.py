@@ -185,6 +185,24 @@ def extract_seller(sidebar, catalog_item=None, user_profile=None):
     )
 
 
+# Kraj sprzedawcy z waluty wysyłki (shipping_details): katalog i sidebar nie podają kraju (27.10: 50/50 ocen bez
+# country_code, więc premia „Polska +1” nigdy nie działała), a wysyłka jest w walucie sprzedawcy - w 50 ofertach
+# z 26.10 waluta PLN = opis po polsku 20/20. EUR to wiele krajów → bez zgadywania.
+COUNTRY_OF_SHIPPING_CURRENCY = {"PLN": ("PL", "Polska"), "HUF": ("HU", "Węgry"), "RON": ("RO", "Rumunia"),
+                                "CZK": ("CZ", "Czechy"), "SEK": ("SE", "Szwecja"), "DKK": ("DK", "Dania")}
+
+
+def fill_country_from_shipping(seller, shipping):
+    """Uzupełnia kraj sprzedawcy z waluty wysyłki, gdy API go nie podało (podany zostaje)."""
+    if seller is None or seller.country_code or shipping is None:
+        return seller
+    found = COUNTRY_OF_SHIPPING_CURRENCY.get((shipping.currency or "").upper())
+    if found:
+        seller.country_code = found[0]
+        seller.country = seller.country or f"{found[1]} (wg waluty wysyłki)"
+    return seller
+
+
 def item_url(item_id, catalog_item=None):
     url = (catalog_item or {}).get("url")
     if url:
@@ -224,7 +242,7 @@ def build_offer(item_id, sidebar, shipping_payload=None, catalog_item=None, user
         currency=currency,
         description=get_plugin(sidebar, "description").get("description") or "",
         photo_urls=extract_photo_urls(sidebar, catalog_item),
-        seller=extract_seller(sidebar, catalog_item, user_profile),
+        seller=fill_country_from_shipping(extract_seller(sidebar, catalog_item, user_profile), shipping),
         shipping=shipping,
         total_price=total,
         brand=brand,
