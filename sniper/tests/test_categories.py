@@ -400,7 +400,7 @@ def test_pl_bonus_only_for_polish_deals(tmp_path):
     assert apply_pl_bonus({"score": 5.0, "is_deal": False}, phone(seller=pl), 1)["score"] == 5.0   # nie robi okazji
     client = FakeClient(response({**EVAL_DEAL, "score": 7}))
     record = run(OfferEvaluator(ai_cfg(tmp_path, pl_bonus=1.0), FakeNotifier(), client=client).evaluate(laptop()))
-    assert record["evaluation"]["score"] == 8.0                         # laptop() ma sprzedawcę z PL
+    assert record["evaluation"]["score"] == 9.0      # reguła spełniona → 8, sprzedawca z PL (laptop()) → +1
     system = client.calls[0]["system"][0]["text"]
     assert "premię za Polskę dolicza program" in system
 
@@ -408,8 +408,8 @@ def test_pl_bonus_only_for_polish_deals(tmp_path):
 def test_prompt_scoring_targets_capital_turnover():
     from sniper.evaluator import system_text
     text = system_text("x", "phone")
-    assert "ograniczony kapitał" in text and "45-50%" in text and "800 zł" in text and "9 → 10" in text
-    assert "- 8: dobra - marża ok. 35% przy szybkiej sprzedaży" in text and "- 7: reguła zysku spełniona, marża ok. 30%" in text
+    assert "ograniczony kapitał" in text and "45%" in text and "800 zł" in text and "9 → 10" in text
+    assert "- 8: okazja - reguła zysku spełniona" in text and "28%" in text and "25%" in text
     assert "orientacyjne" in text                                      # nie na sztywno
 
 
@@ -469,15 +469,21 @@ def test_compare_lines(tmp_path):
 def test_program_enforces_profit_rule(tmp_path):
     """S25 2026-10-26: AI dało 9/10 OKAZJA przy koszcie 1 899 zł, wartości 2 394 zł (marża 19%) - program to blokuje."""
     from sniper.evaluator import enforce_profit_rule, rule_max_buy
-    cfg = ai_cfg(tmp_path, rule_min_profit=300.0, rule_min_margin=30.0, rule_per_point=20.0, rule_costs=46.0)
+    cfg = ai_cfg(tmp_path, rule_min_profit=300.0, rule_margin_cheap=28.0, rule_margin_expensive=25.0,
+                 rule_cheap_sale=1000.0, rule_expensive_sale=2500.0, rule_costs=46.0, rule_deal_score=8.0)
     s25 = phone(title="Galaxy S25 256GB", price=1805.0, total_price=1805.0)          # koszt z opłatą ~1 898 zł
     ev = enforce_profit_rule({"score": 9.0, "is_deal": True, "market_value_pln": 2394.0}, s25, cfg)
     assert ev["is_deal"] is False and ev["score"] == 6.0 and ev["score_ai"] == 9.0 and ev["rule_check"] == "naruszona"
     assert ev["margin_pct"] == pytest.approx(18.8, abs=0.1) and "marża 19%" in ev["red_flags"][-1]
-    assert ev["max_buy_price_pln"] == rule_max_buy(2394.0, cfg) == 1630
-    ok = enforce_profit_rule({"score": 8.0, "is_deal": True, "market_value_pln": 2394.0},
+    # 2394 zł: min. marża 28% - 3 pkt × (1394 / 1500) = 25,2% → zysk ≥ 604 zł → max zakup 2394 - 46 - 604
+    assert ev["max_buy_price_pln"] == rule_max_buy(2394.0, cfg) == 1744
+    assert rule_max_buy(700.0, cfg) == 354 and rule_max_buy(4000.0, cfg) == 2954         # 300 zł / 25%
+    ok = enforce_profit_rule({"score": 7.0, "is_deal": True, "market_value_pln": 2394.0},
                              phone(price=1500.0, total_price=1500.0), cfg)               # koszt ~1 578 zł → 32%
-    assert ok["is_deal"] is True and ok["score"] == 8.0 and ok["meets_profit_rule"] is True
+    assert ok["is_deal"] is True and ok["score"] == 8.0 and ok["score_ai"] == 7.0 and ok["meets_profit_rule"]
+    edge = enforce_profit_rule({"score": 8.0, "is_deal": True, "market_value_pln": 3000.0},
+                               phone(price=2100.0, total_price=2100.0), cfg)             # koszt ~2 208 → 24,9%
+    assert edge["is_deal"] is False and "min. 25% marży przy sprzedaży 3000 zł" in edge["red_flags"][-1]
     cheap = enforce_profit_rule({"score": 8.0, "is_deal": True, "market_value_pln": 700.0},
                                 phone(price=330.0, total_price=330.0), cfg)              # zysk ~304 zł przy 43%
     assert cheap["is_deal"] is True
@@ -676,3 +682,18 @@ def test_tokens_foreign_letters_and_frequent_brand(tmp_path):
     _comparables_db(tmp_path / "d.db", rows)
     found = Comparables(tmp_path / "d.db").lookup("phone", "Vând iPhone 7")
     assert found and found["median"] == 350 and "iphone" in found["words"] and "vând" not in found["words"]
+
+
+def test_rule_min_margin_cheap_to_expensive(tmp_path):
+    from sniper.evaluator import rule_min_margin, rule_required_profit
+    cfg = ai_cfg(tmp_path)
+    assert rule_min_margin(600, cfg) == pytest.approx(0.28) and rule_min_margin(1000, cfg) == pytest.approx(0.28)
+    assert rule_min_margin(1750, cfg) == pytest.approx(0.265) and rule_min_margin(5000, cfg) == pytest.approx(0.25)
+    assert rule_required_profit(0.27, cfg, 800) is None and rule_required_profit(0.27, cfg, 3000) == 300
+
+
+def test_auto_catalogs_start_exactly_at_floor():
+    from sniper.categories import apply_floor
+    specs = parse_catalogs("3580:400-7400*3, 3661:100-5400, 3584:20-100")
+    assert [s.price_from for s in apply_floor(specs, 300, exact=True)] == ["300", "300", "20"]
+    assert [s.price_from for s in apply_floor(specs, 300)] == ["400", "300", "20"]      # lista ręczna: wyższe zostaje

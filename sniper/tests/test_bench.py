@@ -11,7 +11,7 @@ from sniper.tests.test_experiment import _setup
 
 
 def _offers(tmp_path):
-    offers = [phone(id=1, price=450.0, total_price=465.0), phone(id=2, price=700.0, total_price=715.0),
+    offers = [phone(id=1, price=450.0, total_price=465.0), phone(id=2, price=850.0, total_price=865.0),
               phone(id=3, price=1500.0, total_price=1515.0), phone(id=4, price=120.0, total_price=130.0)]
     lines = [json.dumps({"status": "oceniona", "evaluation": {"score": 5, "is_deal": False}, "offer": o.to_dict()})
              for o in offers]

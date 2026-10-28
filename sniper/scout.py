@@ -107,7 +107,8 @@ class Scout:
             log.warning("[SCOUT] SNIPER_CATEGORIES=%s wyłącza wszystkie katalogi - skanuję wszystkie.",
                         ",".join(enabled))
             chosen = specs
-        floored = apply_floor(chosen, getattr(self.cfg, "price_floor", None))
+        floored = apply_floor(chosen, getattr(self.cfg, "price_floor", None),
+                              exact=self.catalogs.setting.lower() == "auto")
         if floored != chosen and not getattr(self, "_floor_logged", False):
             self._floor_logged = True
             log.info("[SCOUT] Minimalna cena %s zł (SNIPER_PRICE_FLOOR) w katalogach: %s", self.cfg.price_floor,

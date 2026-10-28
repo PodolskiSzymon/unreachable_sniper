@@ -88,7 +88,7 @@ def test_model_mode_no_data_damage_and_rule(tmp_path):
     pricey = finish_model(json.loads(json.dumps({**MODEL_REPLY, "red_flags": []})),
                           phone(price=1000.0, total_price=1015.0), cfg, evaluator)
     assert pricey["is_deal"] is False and pricey["score"] <= 6
-    assert formula_score(0.46, 900) == 10 and formula_score(0.46, 600) == 9 and formula_score(0.31, 600) == 7
+    assert formula_score(0.46, 900) == 10 and formula_score(0.31, 600) == 9 and formula_score(0.29, 400) == 8
 
 
 def test_cheap_guard_new_account_and_manual_check():

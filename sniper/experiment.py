@@ -197,14 +197,12 @@ def price_variant(evaluator, category, words):
 
 
 def formula_score(margin, profit):
-    """Ocena wzorem (bez danych o tempie sprzedaży – tempo nie podnosi oceny): PLAN_OCENY.md §7."""
+    """Ocena wzorem dla okazji spełniającej regułę (28.10: reguła spełniona = 8; jak skala w SYSTEM_PROMPT)."""
     if margin >= 0.45 and profit >= 800:
         return 10.0
-    if margin >= 0.45 and profit >= 500:
+    if margin >= 0.35 or profit >= 600:
         return 9.0
-    if margin >= 0.40 or (margin >= 0.35 and profit >= 500):
-        return 8.0
-    return 7.0
+    return 8.0
 
 
 def finish_model(ev, offer, cfg, evaluator, delta=DELTA):
@@ -230,7 +228,7 @@ def finish_model(ev, offer, cfg, evaluator, delta=DELTA):
     sale = worst["sale"] * (1 - delta)
     profit = sale - cost - costs
     margin = profit / sale
-    required = rule_required_profit(margin, cfg)
+    required = rule_required_profit(margin, cfg, sale)
     ev.update(market_value_pln=round(sale), potential_profit_pln=round(profit), margin_pct=round(margin * 100, 1),
               priced_as=worst["label"])
     if ev["condition"] in ("uszkodzony", "na_czesci", "blokada"):
@@ -238,7 +236,7 @@ def finish_model(ev, offer, cfg, evaluator, delta=DELTA):
         ev["score"] = 2.0
         return ev
     if required is None or profit < required:
-        ev["score"] = max(0.0, min(6.0, round(6 * max(margin, 0) / 0.30, 1)))
+        ev["score"] = max(0.0, min(6.0, round(6 * max(margin, 0) / 0.28, 1)))
         return ev
     ev.update(is_deal=True, score=formula_score(margin, profit))
     if ev["condition"] == "nie_wiadomo" or ev["model_confidence"] < MIN_CONFIDENCE:

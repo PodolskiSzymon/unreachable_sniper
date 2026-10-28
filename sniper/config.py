@@ -282,10 +282,15 @@ class AiConfig:
     pl_bonus: float = _env_float("SNIPER_AI_PL_BONUS", 1.0)
     # Reguła zysku sprawdzana przez PROGRAM po ocenie AI (AI potrafi się pomylić - S25 2026-10-26: 9/10 przy 19% marży).
     # Zysk = wartość rynkowa wg AI - koszt zakupu (z opłatą Vinted) - koszty sprzedaży; okazja tylko gdy marża ≥ min
-    # i zysk ≥ min (+ zł za każdy punkt marży poniżej 40%). Inaczej: nie okazja, ocena najwyżej 6.
+    # i zysk ≥ min. Inaczej: nie okazja, ocena najwyżej 6. Spełniona reguła = okazja z oceną co najmniej 8.
+    # 2026-10-28 (użytkownik): marża min. ~28% przy tanich (sprzedaż ≤ 1 000 zł), ~25% przy drogich (≥ 2 500 zł),
+    # pomiędzy liniowo; zysk zawsze ≥ 300 zł. (Wcześniej: min. 30%, 35% → 400 zł, 30% → 500 zł.)
     rule_min_profit: float = _env_float("SNIPER_RULE_MIN_PROFIT", 300.0)
-    rule_min_margin: float = _env_float("SNIPER_RULE_MIN_MARGIN", 30.0)        # %
-    rule_per_point: float = _env_float("SNIPER_RULE_PER_POINT", 20.0)          # zł za punkt marży poniżej 40%
+    rule_margin_cheap: float = _env_float("SNIPER_RULE_MARGIN_CHEAP", 28.0)            # %
+    rule_margin_expensive: float = _env_float("SNIPER_RULE_MARGIN_EXPENSIVE", 25.0)    # %
+    rule_cheap_sale: float = _env_float("SNIPER_RULE_CHEAP_SALE", 1000.0)              # zł - do tylu „tanie”
+    rule_expensive_sale: float = _env_float("SNIPER_RULE_EXPENSIVE_SALE", 2500.0)      # zł - od tylu „drogie”
+    rule_deal_score: float = _env_float("SNIPER_RULE_DEAL_SCORE", 8.0)                 # ocena okazji spełniającej regułę
     rule_costs: float = _env_float("SNIPER_RULE_COSTS", 46.0)                  # Podbicie 26 + wysyłka 20
     # Sposób oceny: zwykly (AI wycenia z karty rynku + podobnych ofert) albo mediany (AI dostaje kilka median z bazy,
     # od szczegółowej do całej rodziny, i wycenia z nich; może poprawić model - sniper/experiment.py, eksperyment

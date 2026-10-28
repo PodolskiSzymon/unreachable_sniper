@@ -117,15 +117,15 @@ Skala score (0-10). Użytkownik ma ograniczony kapitał i mało czasu: chce kupo
 najszybciej obracać gotówką. Liczy się zysk w zł, marża, zwrot z zamrożonej gotówki (zysk / koszt zakupu) i czas \
 do odzyskania pieniędzy. Progi poniżej są orientacyjne - oceniaj całościowo, nie na sztywno. Kraju sprzedawcy NIE \
 uwzględniaj w score (program sam doda +1 okazjom z Polski - wtedy np. 9 → 10):
-- 10: wyjątkowa okazja - marża ok. 45-50% lub więcej i zysk ok. 800 zł lub więcej, dobry stan, szybka sprzedaż, \
+- 10: wyjątkowa okazja - marża ok. 45% lub więcej i zysk ok. 800 zł lub więcej, dobry stan, szybka sprzedaż, \
 pewna cena sprzedaży.
-- 9: bardzo dobra - marża ok. 45%+ i zysk ok. 500 zł+, albo marża ok. 40% przy szybkiej sprzedaży (do ok. 5 dni).
-- 8: dobra - marża ok. 35% przy szybkiej sprzedaży (do ok. 5 dni) albo marża ok. 40% przy wolniejszej sprzedaży.
-- 7: reguła zysku spełniona, marża ok. 30% (albo 35% przy wolniejszej sprzedaży) - kupić tylko, gdy nie ma lepszych.
+- 9: bardzo dobra - marża ok. 35-40%+ albo zysk ok. 600 zł+, przy szybkiej sprzedaży (do ok. 5 dni).
+- 8: okazja - reguła zysku spełniona: zysk ≥ 300 zł i marża ≥ ok. 28% przy tanich rzeczach (sprzedaż do ok. \
+1 000 zł), malejąco do ok. 25% przy drogich (sprzedaż od ok. 2 500 zł).
 - 4-6: na granicy - zysk nieco poniżej reguły albo ważne niewiadome (np. nieznany model / pamięć).
 - 0-3: nie kupować - za drogo, poważne czerwone flagi, uszkodzony.
-Marża poniżej 30% albo zysk poniżej 300 zł to NIGDY okazja (is_deal = false, score ≤ 6), także przy drogim sprzęcie - \
-program i tak to sprawdzi i odrzuci.
+Marża poniżej tego minimum albo zysk poniżej 300 zł to NIGDY okazja (is_deal = false, score ≤ 6) - program i tak to \
+sprawdzi i odrzuci; okazję spełniającą regułę program podnosi do co najmniej 8.
 Obniż score o 1-2, gdy: cena sprzedaży niepewna (grupa ⚠, brak pasującego wiersza), sprzedaż potrwa dłużej niż \
 ok. tydzień, stan budzi wątpliwości, brakuje ładowarki / akcesoriów albo czeka Cię dużo pracy (czyszczenie, naprawa, \
 zdobywanie części).
@@ -318,26 +318,32 @@ DEFAULT_TASK = Task(EVALUATION_SCHEMA, lambda guidelines, category: system_text(
                     lambda text: normalize_evaluation(text))
 
 
-def rule_required_profit(margin, cfg):
-    """Minimalny zysk przy danej marży (None = marża poniżej minimum)."""
-    min_margin = getattr(cfg, "rule_min_margin", 30.0) / 100
-    if margin < min_margin - 1e-9:
+def rule_min_margin(sale, cfg):
+    """Minimalna marża (ułamek) przy cenie sprzedaży `sale`: tanie ~28%, drogie ~25%, pomiędzy liniowo (jak
+    analyzer/guide.min_margin - reguła użytkownika 2026-10-28)."""
+    cheap = getattr(cfg, "rule_margin_cheap", 28.0) / 100
+    dear = getattr(cfg, "rule_margin_expensive", 25.0) / 100
+    low, high = getattr(cfg, "rule_cheap_sale", 1000.0), getattr(cfg, "rule_expensive_sale", 2500.0)
+    if not sale or sale <= low or high <= low:
+        return cheap
+    if sale >= high:
+        return dear
+    return cheap + (dear - cheap) * (sale - low) / (high - low)
+
+
+def rule_required_profit(margin, cfg, sale=None):
+    """Minimalny zysk (None = marża poniżej minimum dla tej ceny sprzedaży)."""
+    if margin < rule_min_margin(sale, cfg) - 1e-9:
         return None
-    base = getattr(cfg, "rule_min_profit", 300.0)
-    return base if margin >= 0.40 else base + getattr(cfg, "rule_per_point", 20.0) * 100 * (0.40 - margin)
+    return getattr(cfg, "rule_min_profit", 300.0)
 
 
 def rule_max_buy(sale, cfg):
     """Najwyższy koszt zakupu spełniający regułę przy cenie sprzedaży `sale` (jak analyzer/guide.max_buy)."""
     if not sale or sale <= 0:
         return None
-    base, k = getattr(cfg, "rule_min_profit", 300.0), getattr(cfg, "rule_per_point", 20.0) * 100
-    min_margin = getattr(cfg, "rule_min_margin", 30.0) / 100
-    candidates = [max(0.4 * sale, base)]
-    p2 = max(min_margin * sale, base, (base + 0.4 * k) * sale / (sale + k))
-    if p2 < 0.4 * sale:
-        candidates.append(p2)
-    buy = sale - getattr(cfg, "rule_costs", 46.0) - min(candidates)
+    profit = max(getattr(cfg, "rule_min_profit", 300.0), rule_min_margin(sale, cfg) * sale)
+    buy = sale - getattr(cfg, "rule_costs", 46.0) - profit
     return round(buy) if buy > 0 else 0
 
 
@@ -363,7 +369,7 @@ def enforce_profit_rule(evaluation, offer, cfg, comps=None):
         return evaluation
     profit = value - cost - getattr(cfg, "rule_costs", 46.0)
     margin = profit / value
-    required = rule_required_profit(margin, cfg)
+    required = rule_required_profit(margin, cfg, value)
     meets = required is not None and profit >= required
     evaluation.update(potential_profit_pln=round(profit), margin_pct=round(margin * 100, 1),
                       max_buy_price_pln=rule_max_buy(value, cfg), meets_profit_rule=meets,
@@ -374,11 +380,15 @@ def enforce_profit_rule(evaluation, offer, cfg, comps=None):
             f"Program: bardzo tanio - {cost / reference * 100:.0f}% wartości. Częste przy blokadzie (iCloud / konto), "
             f"ukrytej usterce albo oszustwie - przed zakupem sprawdź opis, zdjęcia ekranu ustawień, płać tylko przez "
             f"Vinted")
+    deal_score = getattr(cfg, "rule_deal_score", 8.0)
+    if evaluation.get("is_deal") and meets and deal_score and evaluation["score"] < deal_score:
+        evaluation["score_ai"] = evaluation["score"]          # reguła spełniona = okazja co najmniej 8 (28.10)
+        evaluation["score"] = deal_score
     if evaluation.get("is_deal") and not meets:
         evaluation["score_ai"] = evaluation["score"]
         evaluation.update(is_deal=False, score=min(evaluation["score"], 6.0))
-        need = (f"min. {getattr(cfg, 'rule_min_margin', 30.0):g}% marży" if required is None
-                else f"przy tej marży min. {required:.0f} zł zysku")
+        need = (f"min. {rule_min_margin(value, cfg) * 100:.0f}% marży przy sprzedaży {value:.0f} zł"
+                if required is None else f"min. {required:.0f} zł zysku")
         evaluation.setdefault("red_flags", []).append(
             f"Program: reguła zysku niespełniona - zysk {profit:.0f} zł, marża {margin * 100:.0f}% ({need})")
     return evaluation
@@ -972,8 +982,9 @@ class OfferEvaluator:
         comps = self.lookup_comparables(offer)
         cost, factor = _offer_price(offer), getattr(self.cfg, "comparable_factor", 1.2)
         if comps and comps.get("estimate") and cost is not None and factor:
-            # Nawet przy wycenie AI o `factor` ponad dane: marża 30% wymaga kosztu ≤ 0,7 × wartości.
-            limit = comps["estimate"] * factor * 0.7
+            # Nawet przy wycenie AI o `factor` ponad dane: najniższa dopuszczalna marża (drogie, 25%) wymaga kosztu
+            # ≤ 0,75 × wartości.
+            limit = comps["estimate"] * factor * (1 - getattr(self.cfg, "rule_margin_expensive", 25.0) / 100)
             if cost > limit:
                 return (f"za drogo wg podobnych ofert: {cost:.0f} zł > {limit:.0f} zł (szacunek "
                         f"{comps['estimate']:.0f} zł z {comps['n_active'] + comps['n_gone']} ofert)")
