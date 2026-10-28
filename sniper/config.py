@@ -358,6 +358,7 @@ MODEL_PRICES = {
     "gemini-3.1-flash-lite": (0.25, 1.50),
     "gemini-3.5-flash-lite": (0.30, 2.50),
     "gemini-2.5-flash": (0.30, 2.50),
+    "gemini-2.5-flash-lite": (0.10, 0.40),
     "claude-opus-5-5": (4.0, 20.0),
     "claude-sonnet-5-5": (2.0, 10.0),
     "claude-haiku-4-5": (1.0, 5.0),

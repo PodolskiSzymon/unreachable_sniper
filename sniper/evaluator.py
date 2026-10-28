@@ -511,6 +511,19 @@ def image_mime(url):
     return next((mime for ext, mime in _MIME.items() if path.endswith(ext)), "image/jpeg")
 
 
+# Gemini 2.x nie zna thinking_level (to parametr Gemini 3) - tam budżet tokenów myślenia (dzień testowy 28.10:
+# porównanie z gemini-2.5-flash-lite).
+THINKING_BUDGET = {"low": 512, "medium": 2048, "high": 8192}
+
+
+def thinking_config(types, cfg):
+    if not cfg.effort:
+        return None
+    if cfg.model.startswith("gemini-2"):
+        return types.ThinkingConfig(thinking_budget=THINKING_BUDGET.get(cfg.effort, 2048))
+    return types.ThinkingConfig(thinking_level=cfg.effort.upper())
+
+
 def build_gemini_request(offer, cfg: AiConfig, guidelines, images, hint="", task=None):
     """Argumenty dla client.aio.models.generate_content(...).
 
@@ -533,7 +546,7 @@ def build_gemini_request(offer, cfg: AiConfig, guidelines, images, hint="", task
         response_mime_type="application/json",
         response_json_schema=task.schema,
         max_output_tokens=cfg.max_tokens,
-        thinking_config=types.ThinkingConfig(thinking_level=cfg.effort.upper()) if cfg.effort else None,
+        thinking_config=thinking_config(types, cfg),
         media_resolution=(types.MediaResolution(f"MEDIA_RESOLUTION_{cfg.media_resolution.upper()}")
                           if getattr(cfg, "media_resolution", "") and images else None),
         automatic_function_calling=types.AutomaticFunctionCallingConfig(disable=True),   # bez narzędzi

@@ -97,3 +97,99 @@ def test_eval_mode_medians_in_sniper(tmp_path):
     assert ev["levels"] and ev["market_value_pln"] < 1600 and ev["market_value_ai"] == 3000   # przycięte do mediany
     run(evaluator.evaluate(laptop()))
     assert "<mediany>" not in client.calls[1]["messages"][0]["content"][-1]["text"]
+
+
+PHONE_TABLE = """# Telefony
+
+| grupa | ofert | sprzedam za ~ | max zakup |
+|---|---|---|---|
+| iphone 13 128 GB | 100 | 1 100 | 700 |
+| iphone 13 pro 128 GB | 50 | 1 900 | 1 300 |
+| galaxy a51 128 GB | 20 | 380 | 100 |
+"""
+
+
+def _basal_client(seen, choice="m1", akcesorium=0.05):
+    import httpx
+
+    def handler(request):
+        body = json.loads(request.content)
+        seen.append(body)
+        keys = list(body["questions"]["model"]["criteria"])
+        answers = {"model": {"type": "choice", "choice": choice,
+                             "probabilities": {k: (0.9 if k == choice else 0.1 / (len(keys) - 1)) for k in keys}},
+                   "akcesorium": {"type": "noul", "noul": akcesorium},
+                   "uszkodzony": {"type": "noul", "noul": 0.02}, "poza_vinted": {"type": "noul", "noul": 0.01}}
+        return httpx.Response(200, json={"answers": answers, "usage": {"latency_ms": 42}})
+    return httpx.AsyncClient(transport=httpx.MockTransport(handler))
+
+
+def test_basal_mode_candidates_medians_and_answer(tmp_path):
+    from sniper import basal
+    from sniper.evaluator import OfferEvaluator
+    _setup(tmp_path)
+    (tmp_path / "guides" / "phone.md").write_text(PHONE_TABLE, encoding="utf-8")
+    offer = phone(title="Iphone 13 niebieski", description="Sprawny, 128 GB, bateria 88%", price=500.0,
+                  total_price=515.0)
+    evaluator = OfferEvaluator(ai_cfg(tmp_path), None, client=FakeClient(response(
+        {**EVAL_DEAL, "score": 8, "market_value_pln": 1200, "in_medians": True, "median_used": 1,
+         "corrected_model": None})))
+    cands = basal.candidates(evaluator.guides._file("phone").rows, offer)
+    assert [r.name for _k, r in cands][:2] == ["iphone 13 128 GB", "iphone 13 pro 128 GB"]
+    assert "galaxy a51 128 GB" not in [r.name for _k, r in cands]
+    seen = []
+    ev, usage, photos, error, info = run(basal.run(evaluator, offer, client=_basal_client(seen)))
+    assert error is None and info["choice"] == "iphone 13 128 GB" and info["latency_ms"] == 42
+    request = seen[0]
+    assert request["questions"]["model"]["type"] == "choice" and "inny" in request["questions"]["model"]["criteria"]
+    assert set(request["questions"]) == {"model", "akcesorium", "uszkodzony", "poza_vinted"}
+    assert "Tytuł: Iphone 13 niebieski" in request["state"]
+    prompt = evaluator.client.calls[0]["messages"][0]["content"][-1]["text"]
+    assert "<rozpoznanie_basal>" in prompt and "iphone 13 128 GB (90%)" in prompt and "<mediany>" in prompt
+    assert ev["basal"]["query"] == "iphone 13 128 GB" and ev["levels"]
+    assert ev["is_deal"] is True                                         # 1200 - 515 - opłata - 46 → reguła OK
+
+
+def test_basal_unreachable_and_test_day_set(tmp_path):
+    import httpx
+
+    from sniper import basal
+    from sniper.bench import SETS, VARIANTS
+    from sniper.evaluator import OfferEvaluator
+    _setup(tmp_path)
+    (tmp_path / "guides" / "phone.md").write_text(PHONE_TABLE, encoding="utf-8")
+
+    def down(request):
+        raise httpx.ConnectError("odmowa połączenia")
+    evaluator = OfferEvaluator(ai_cfg(tmp_path), None, client=FakeClient(response()))
+    ev, _u, _p, error, _info = run(basal.run(evaluator, phone(), client=httpx.AsyncClient(
+        transport=httpx.MockTransport(down))))
+    assert ev is None and "basal niedostępny" in error and evaluator.client.calls == []   # bez kosztu AI
+    names = resolve_variants("dzien_testowy")
+    assert len(names) == 12 == len(SETS["dzien_testowy"].split(","))
+    assert VARIANTS["bas_25l_z3"][0] == {"tryb": "basal", "model": "gemini-2.5-flash-lite", "max_photos": 3,
+                                         "effort": "medium"}
+    assert {mode for mode, _o, _s in names.values()} == {"mediany", "model", "basal"}
+
+
+def test_bench_runs_basal_variant(tmp_path):
+    _setup(tmp_path)
+    (tmp_path / "guides" / "phone.md").write_text(PHONE_TABLE, encoding="utf-8")
+    offers = [(phone(id=1, title="iPhone 13 128GB", price=450.0, total_price=465.0), {})]
+    reply = {**EVAL_DEAL, "market_value_pln": 1200, "in_medians": True, "median_used": 1, "corrected_model": None}
+    variants = resolve_variants("bas_38_z3")
+    rows, _skipped = run(run_bench(ai_cfg(tmp_path), offers, variants, {}, client=FakeClient(response(reply)),
+                                   basal_client=_basal_client([])))
+    assert rows[0]["basal"]["choice"] == "iphone 13 128 GB" and rows[0]["evaluation"]["is_deal"] is True
+    text = "\n".join(summary(rows, {}, offers, {}, "bas_38_z3", variants))
+    assert "basal: 1 rozpoznań, mediana czasu 42 ms" in text
+
+
+def test_gemini_2_thinking_budget(tmp_path):
+    from sniper.evaluator import build_gemini_request
+    old = build_gemini_request(phone(), ai_cfg(tmp_path, provider="gemini", model="gemini-2.5-flash-lite",
+                                               effort="medium"), "W", [])
+    assert old["config"].thinking_config.thinking_budget == 2048 and old["config"].thinking_config.thinking_level is None
+    new = build_gemini_request(phone(), ai_cfg(tmp_path, provider="gemini", model="gemini-3.8-flash",
+                                               effort="medium"), "W", [])
+    assert new["config"].thinking_config.thinking_level.name == "MEDIUM"

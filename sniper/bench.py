@@ -31,7 +31,7 @@ log = logging.getLogger("sniper.bench")
 
 LITE_MODEL = "gemini-3.1-flash-lite"
 KASKADA_PROG = 4.0                   # etap 1 (tani, bez zdjęć) ≥ tyle albo okazja → pełna ocena
-MODES = ("zwykly", "mediany", "model", "kaskada")
+MODES = ("zwykly", "mediany", "model", "kaskada", "basal")
 VARIANTS = {
     "obecny": ({}, "ustawienia z sniper/.env (jak Sniper, także SNIPER_EVAL_MODE)"),
     "mediany": ({"tryb": "mediany"}, "AI wycenia z kilku median z bazy, może poprawić model (eksperyment)"),
@@ -46,6 +46,18 @@ VARIANTS = {
     "mediany_srednia": ({"tryb": "mediany", "media_resolution": "medium"}, "mediany + średnia rozdzielczość"),
     "kaskada": ({"tryb": "kaskada"}, f"etap 1 {LITE_MODEL} bez zdjęć, pełna ocena tylko gdy ≥ {KASKADA_PROG:g}/10"),
 }
+# Dzień testowy 28.10 (użytkownik): tryby mediany / model / basal × Gemini 3.8 Flash / 2.5 Flash Lite × 3 / 6 zdjęć,
+# myślenie medium → 12 wariantów na tych samych ofertach.
+TEST_MODELS = {"38": "gemini-3.8-flash", "25l": "gemini-2.5-flash-lite"}
+TEST_MODES = {"med": "mediany", "mod": "model", "bas": "basal"}
+for _m, _mode in TEST_MODES.items():
+    for _k, _model in TEST_MODELS.items():
+        for _photos in (3, 6):
+            VARIANTS[f"{_m}_{_k}_z{_photos}"] = (
+                {"tryb": _mode, "model": _model, "max_photos": _photos, "effort": "medium"},
+                f"{_mode}, {_model}, {_photos} zdjęć, myślenie medium" +
+                (" (basal rozpoznaje → mediany → Gemini)" if _mode == "basal" else ""))
+SETS = {"dzien_testowy": ",".join(f"{m}_{k}_z{p}" for m in TEST_MODES for k in TEST_MODELS for p in (3, 6))}
 DEFAULT_VARIANTS = "obecny,mediany,zdjecia3,srednia_rozdz,niska_rozdz,mysl_niska,lite_mediany,kaskada"
 GOLDEN_FILE = Path(__file__).with_name("bench_golden.json")
 
@@ -142,8 +154,9 @@ def estimate(base, variants, n_offers):
 class Bench:
     """Jedna instancja OfferEvaluator na wariant (ten sam kod co Sniper), wspólny limit równoległych wywołań."""
 
-    def __init__(self, base, variants, concurrency=10, client=None):
+    def __init__(self, base, variants, concurrency=10, client=None, basal_client=None):
         self.variants = variants
+        self.basal_client = basal_client
         self.evaluators = {}
         for name, (mode, over, stage1) in variants.items():
             cfg = replace(base, max_concurrent=concurrency, **over)
@@ -167,6 +180,12 @@ class Bench:
                 stage2 = error is None and (result["is_deal"] or result["score"] >= KASKADA_PROG)
                 if not stage2:
                     return _row(name, offer, result, sum(costs), started, error, False, _merge(usages))
+            if mode == "basal":
+                from .basal import run as run_basal
+                result, usage, _photos, error, info = await run_basal(ev, offer, client=self.basal_client)
+                row = _row(name, offer, result, call_cost(ev, usage), started, error, True, usage)
+                row["basal"] = info
+                return row
             if mode in ("zwykly", "kaskada"):
                 result, usage, error = await _zwykly(ev, offer)
             else:
@@ -212,9 +231,9 @@ def gate_reason(evaluator, offer, floor):
 
 
 async def run_bench(base, offers, variants, golden, concurrency=10, client=None, floor=0.0, use_gate=True,
-                    progress=None):
+                    progress=None, basal_client=None):
     """→ (wiersze wyników, pominięte przed AI {id: powód})."""
-    bench = Bench(base, variants, concurrency, client)
+    bench = Bench(base, variants, concurrency, client, basal_client)
     say = progress or (lambda _t: None)
     try:
         gatekeeper = next(iter(bench.evaluators.values()))[1]
@@ -283,6 +302,12 @@ def summary(rows, skipped, offers, golden, ref, variants):
             f"{name:<16} {cost / n:>8.4f} {cost:>8.3f} {tin:>6.0f}/{tout:<5.0f} {secs:>5.1f} {len(mine) - len(ok):>5} "
             f"{deals:>6} {high:>2} | {tp:>14} / {fn:>8} / {fp:>8}  {_frac(in_range, with_range):>9} | "
             + ("        (odniesienie)" if agree is None else f"{agree[0]:>14} {agree[1]:>4} {agree[2]:>5}"))
+    basal_rows = [r for r in rows if r.get("basal")]
+    if basal_rows:
+        times = sorted(r["basal"].get("latency_ms") or 0 for r in basal_rows)
+        other = sum(1 for r in basal_rows if not r["basal"].get("choice"))
+        lines += ["", f"basal: {len(basal_rows)} rozpoznań, mediana czasu {times[len(times) // 2]:.0f} ms, "
+                      f"„inny / nie wiadomo” {other} ({other / len(basal_rows):.0%})"]
     disputed = [i for i in ids if any(_is_deal(by.get(v, {}).get(i)) for v in variants)
                 or (gold.get(i) or {}).get("deal")]
     if disputed:
@@ -323,6 +348,7 @@ def _agreement(mine, ref):
 
 def resolve_variants(names, custom=()):
     out = {}
+    names = ",".join(SETS.get(n.strip(), n.strip()) for n in names.split(","))
     for name in [n.strip() for n in names.split(",") if n.strip()]:
         if name not in VARIANTS:
             raise SystemExit(f"Nieznany wariant {name!r} - lista: python -m sniper.bench --lista")
@@ -331,6 +357,16 @@ def resolve_variants(names, custom=()):
         name, over = parse_custom(text)
         out[name] = split_overrides(over)
     return out
+
+
+async def basal_alive():
+    import httpx
+    from .basal import BASAL_URL
+    try:
+        async with httpx.AsyncClient(timeout=5.0, trust_env=False) as client:
+            return (await client.get(f"{BASAL_URL}/health")).status_code == 200
+    except httpx.HTTPError:
+        return False
 
 
 async def _cli(argv=None):
@@ -349,13 +385,22 @@ async def _cli(argv=None):
     logging.basicConfig(level=logging.WARNING, format="%(asctime)s [%(levelname)s] %(name)s: %(message)s")
     if args.lista:
         for name, (over, text) in VARIANTS.items():
-            print(f"  {name:<16} {text}  {over or ''}")
+            print(f"  {name:<16} {text}")
+        for name, value in SETS.items():
+            print(f"  zestaw {name}: {value}")
         return 0
     cfg = ScoutConfig()
     if not cfg.ai.api_key:
         print("Brak klucza: ustaw SNIPER_AI_API_KEY (albo GEMINI_API_KEY) w sniper/.env.")
         return 1
     variants = resolve_variants(args.warianty, args.wlasny)
+    if any(mode == "basal" for mode, _o, _s in variants.values()) and not await basal_alive():
+        from .basal import BASAL_URL
+        print(f"⚠ Serwer basal nie odpowiada ({BASAL_URL}/health) - warianty basal pominięte. Uruchom basal-serve "
+              f"albo ustaw SNIPER_BASAL_URL.")
+        variants = {k: v for k, v in variants.items() if v[0] != "basal"}
+        if not variants:
+            return 1
     ref = args.ref or next(iter(variants))
     golden = load_golden()
     offers = load_offers(cfg.log_dir, args.last, golden)
