@@ -270,6 +270,9 @@ class AiConfig:
     # tokenów wejścia (~1 100 na zdjęcie przy domyślnej, 27.10: ~13,6 tys. tokenów na ofertę) - porównaj jakość
     # w `python -m sniper.bench` zanim zmienisz.
     media_resolution: str = _env("SNIPER_AI_MEDIA_RESOLUTION").lower()
+    # Wytyczne w zapytaniu: wszystkie (cała tabela kategorii, ~4-5 tys. tokenów) albo dopasowane (zasady + tylko
+    # wiersze pasujące do tytułu; ceny i tak są w <mediany> / <porownywalne>). Laptopy zawsze całe.
+    guide_rows: str = _env("SNIPER_AI_GUIDE_ROWS", "wszystkie").lower()
     guidelines_file: str = _env("SNIPER_AI_GUIDELINES") or str(Path(__file__).with_name("guidelines.md"))
     # Wytyczne per kategoria z analizatora: <folder>/<kategoria>.md (+ catalogs.json z zakresami cen).
     guides_dir: str = _env("SNIPER_GUIDES_DIR") or str(Path(__file__).with_name("guides"))

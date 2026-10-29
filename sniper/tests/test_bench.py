@@ -167,7 +167,7 @@ def test_basal_unreachable_and_test_day_set(tmp_path):
     assert ev is None and "basal niedostępny" in error and evaluator.client.calls == []   # bez kosztu AI
     names = resolve_variants("dzien_testowy")
     assert len(names) == 12 == len(SETS["dzien_testowy"].split(","))
-    assert VARIANTS["bas_25l_z3"][0] == {"tryb": "basal", "model": "gemini-2.5-flash-lite", "max_photos": 3,
+    assert VARIANTS["bas_35l_z3"][0] == {"tryb": "basal", "model": "gemini-3.5-flash-lite", "max_photos": 3,
                                          "effort": "medium"}
     assert {mode for mode, _o, _s in names.values()} == {"mediany", "model", "basal"}
 
@@ -193,3 +193,24 @@ def test_gemini_2_thinking_budget(tmp_path):
     new = build_gemini_request(phone(), ai_cfg(tmp_path, provider="gemini", model="gemini-3.8-flash",
                                                effort="medium"), "W", [])
     assert new["config"].thinking_config.thinking_level.name == "MEDIUM"
+
+
+def test_short_guidelines_and_test_day_2(tmp_path):
+    from sniper.bench import SETS
+    from sniper.guides import GuideBook
+    from sniper.tests.test_experiment import _setup
+    _setup(tmp_path)
+    text = "# Telefony\n\n## Strategia\n- zysk ≥ 300 zł\n\n## Ceny (3 grupy)\n\n" + PHONE_TABLE.split("\n", 2)[2]
+    (tmp_path / "guides" / "phone.md").write_text(text, encoding="utf-8")
+    book = GuideBook(tmp_path / "guides", tmp_path / "brak.md")
+    short = book.short_text("phone", "iPhone 13 128GB czarny")
+    assert "zysk ≥ 300 zł" in short and "| iphone 13 128 GB |" in short and "galaxy a51" not in short
+    assert "| grupa |" in short and "tylko wiersze pasujące" in short
+    assert "Brak pasującego wiersza" in book.short_text("phone", "Motorola g53")
+    evaluator_cfg = ai_cfg(tmp_path, guide_rows="dopasowane")
+    from sniper.evaluator import OfferEvaluator
+    client = FakeClient(response())
+    run(OfferEvaluator(evaluator_cfg, None, client=client).evaluate(phone(title="iPhone 13 128GB")))
+    system = client.calls[0]["system"][0]["text"]
+    assert "galaxy a51" not in system and "| iphone 13 128 GB |" in system
+    assert len(resolve_variants("dzien_testowy2")) == 6 and "d2_35l" in SETS["dzien_testowy2"]

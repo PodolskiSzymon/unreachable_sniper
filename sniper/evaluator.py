@@ -641,6 +641,9 @@ class GeminiBackend:
 
     def is_photo_error(self, exc):
         # 400 przy zdjęciach (np. Gemini nie pobrało URL-a) - ale nie zły klucz, który Google też zgłasza jako 400.
+        # 404 „Cannot fetch content from the provided URL” = zdjęcie usunięte z CDN (dzień testowy 29.10).
+        if self._code(exc) == 404 and "provided URL" in str(exc):
+            return True
         return self._code(exc) == 400 and not self._bad_key(exc)
 
     def is_retryable(self, exc):
@@ -1121,7 +1124,8 @@ class OfferEvaluator:
     async def _call_model(self, offer, comps=None, hint=None, task=None):
         from .comparables import describe
         category = getattr(offer, "category", None)
-        guidelines = self.guides.text(category)
+        short = getattr(self.cfg, "guide_rows", "wszystkie") == "dopasowane" and category not in (None, "laptop")
+        guidelines = self.guides.short_text(category, offer.title) if short else self.guides.text(category)
         if hint is None:
             hint = market_card(self.guides.match(category, offer.title)) + describe(comps)
         with_photos = True

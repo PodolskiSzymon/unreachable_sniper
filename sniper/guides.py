@@ -167,6 +167,24 @@ class GuideBook:
                 text += "\n\n## Uzupełnienie: ręczne wytyczne użytkownika (laptopy)\n\n" + manual
         return text
 
+    def short_text(self, category, title, limit=8):
+        """Wytyczne bez pełnej tabeli: zasady (do „## Ceny”) + nagłówek tabeli + wiersze pasujące do tytułu
+        (SNIPER_AI_GUIDE_ROWS=dopasowane - mniej tokenów; dzień testowy 29.10)."""
+        text = self.text(category)
+        cut = text.find("\n## Ceny")
+        if cut < 0:
+            return text
+        lines = text.splitlines()
+        header = next((i for i, line in enumerate(lines) if line.startswith("| grupa")), None)
+        rows = self.match(category, title) or self.match(category, title, relaxed=True)
+        out = [text[:cut].rstrip(), "", "## Ceny – tylko wiersze pasujące do tytułu (pozostałe pominięte; dane z bazy "
+               "są w <mediany> / <porownywalne>)"]
+        if header is not None and rows:
+            out += ["", lines[header], lines[header + 1]] + [r.line for r in rows[:limit]]
+        else:
+            out += ["", "Brak pasującego wiersza w tabeli."]
+        return "\n".join(out)
+
     def match(self, category, title, relaxed=False):
         try:
             return match(self._file(category).rows, title, category, relaxed)

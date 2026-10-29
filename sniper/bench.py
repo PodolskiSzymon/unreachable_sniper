@@ -48,7 +48,8 @@ VARIANTS = {
 }
 # Dzień testowy 28.10 (użytkownik): tryby mediany / model / basal × Gemini 3.8 Flash / 2.5 Flash Lite × 3 / 6 zdjęć,
 # myślenie medium → 12 wariantów na tych samych ofertach.
-TEST_MODELS = {"38": "gemini-3.8-flash", "25l": "gemini-2.5-flash-lite"}
+# 29.10: gemini-2.5-flash-lite niedostępny dla nowych kont (404, Google wskazuje gemini-3.5-flash-lite).
+TEST_MODELS = {"38": "gemini-3.8-flash", "35l": "gemini-3.5-flash-lite"}
 TEST_MODES = {"med": "mediany", "mod": "model", "bas": "basal"}
 for _m, _mode in TEST_MODES.items():
     for _k, _model in TEST_MODELS.items():
@@ -57,7 +58,19 @@ for _m, _mode in TEST_MODES.items():
                 {"tryb": _mode, "model": _model, "max_photos": _photos, "effort": "medium"},
                 f"{_mode}, {_model}, {_photos} zdjęć, myślenie medium" +
                 (" (basal rozpoznaje → mediany → Gemini)" if _mode == "basal" else ""))
-SETS = {"dzien_testowy": ",".join(f"{m}_{k}_z{p}" for m in TEST_MODES for k in TEST_MODELS for p in (3, 6))}
+# Dzień testowy 2 (29.10): tylko mediany, 6 zdjęć - tańsze modele, krótsze myślenie, wytyczne bez pełnej tabeli.
+for _name, _over, _text in (
+        ("d2_38", {}, "gemini-3.8-flash (odniesienie)"),
+        ("d2_38_mysl_low", {"effort": "low"}, "gemini-3.8-flash, myślenie low"),
+        ("d2_38_krotkie", {"guide_rows": "dopasowane"}, "gemini-3.8-flash, wytyczne tylko z pasującymi wierszami"),
+        ("d2_35l", {"model": "gemini-3.5-flash-lite"}, "gemini-3.5-flash-lite"),
+        ("d2_35l_krotkie", {"model": "gemini-3.5-flash-lite", "guide_rows": "dopasowane"},
+         "gemini-3.5-flash-lite, wytyczne tylko z pasującymi wierszami"),
+        ("d2_31l", {"model": "gemini-3.1-flash-lite"}, "gemini-3.1-flash-lite")):
+    VARIANTS[_name] = ({"tryb": "mediany", "model": "gemini-3.8-flash", "max_photos": 6, "effort": "medium",
+                        **_over}, f"mediany, 6 zdjęć: {_text}")
+SETS = {"dzien_testowy": ",".join(f"{m}_{k}_z{p}" for m in TEST_MODES for k in TEST_MODELS for p in (3, 6)),
+        "dzien_testowy2": "d2_38,d2_38_mysl_low,d2_38_krotkie,d2_35l,d2_35l_krotkie,d2_31l"}
 DEFAULT_VARIANTS = "obecny,mediany,zdjecia3,srednia_rozdz,niska_rozdz,mysl_niska,lite_mediany,kaskada"
 GOLDEN_FILE = Path(__file__).with_name("bench_golden.json")
 
@@ -170,8 +183,8 @@ class Bench:
 
     async def one(self, name, offer):
         mode, ev, first = self.evaluators[name]
-        started = time.monotonic()
         async with self.slots:
+            started = time.monotonic()                # czas samej oceny, bez czekania w kolejce
             costs, usages, stage2 = [], [], True
             if mode == "kaskada":
                 result, usage, error = await _zwykly(first, offer)
