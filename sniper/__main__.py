@@ -5,8 +5,7 @@ import logging.handlers
 from pathlib import Path
 from urllib.parse import urlsplit
 
-from .config import (MAIN_PROXY, ScoutConfig, extra_proxy_url, parse_proxy_routes, proxy_env_names,
-                     require_proxy_url)
+from .config import MAIN_PROXY, ScoutConfig, extra_proxy_url, proxy_env_names, require_proxy_url
 from .notifier import EmailNotifier
 from .scout import Scout
 from .session import VintedSession
@@ -35,15 +34,15 @@ def build_session(cfg, proxy_url, state_name="session.json"):
 
 
 def build_extra_sessions(cfg):
-    """Dodatkowe proxy z SNIPER_PROXY_ROUTES → {nazwa: VintedSession}. Proxy bez adresu w .env - błąd w logu, a jego
-    kategorie idą przez główne proxy (Sniper działa dalej)."""
+    """Dodatkowe proxy (SNIPER_PROXY_<N>_KATEGORIE) → {nazwa: VintedSession}. Proxy bez adresu w .env - błąd w logu,
+    a jego kategorie idą przez główne proxy (Sniper działa dalej)."""
     sessions = {}
-    for name in sorted(set(parse_proxy_routes(cfg.proxy_routes).values()) - {MAIN_PROXY}):
+    for name in sorted(set(dict(cfg.proxy_routes).values()) - {MAIN_PROXY}):
         url = extra_proxy_url(name)
         if not url:
             logging.getLogger("sniper").error(
-                "[PROXY] SNIPER_PROXY_ROUTES wskazuje proxy „%s”, ale w sniper/.env brak %s - jego kategorie idą przez "
-                "główne proxy.", name, proxy_env_names(name))
+                "[PROXY] Proxy %s ma kategorie, ale w sniper/.env brak %s - jego kategorie idą przez główne proxy.",
+                name, proxy_env_names(name))
             continue
         log_proxy(name, url)
         sessions[name] = build_session(cfg, url, f"session_{name}.json")
@@ -154,11 +153,15 @@ async def main():
     from .mirror import build_mirror
     mirror = build_mirror(cfg)
     mirror_task = asyncio.create_task(mirror.run(), name="log-mirror") if mirror else None
+    from . import fx
+    fx_task = asyncio.create_task(fx.run(cfg.fx_refresh_h), name="fx-rates") if cfg.fx_refresh_h > 0 else None
     try:
         await scout.run()
     finally:
         if mirror_task:
             mirror_task.cancel()
+        if fx_task:
+            fx_task.cancel()
         await scout.shutdown()
         if evaluator:
             await evaluator.drain()      # oceny w locie -> ich maile trafiają do notifier (albo do buyera)

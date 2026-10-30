@@ -14,15 +14,16 @@ stara kopia, nie czytać.
   botów (auto-zakup wyłączony, `SNIPER_BUY_ENABLED=false`, bo Vinted wylogowuje konto bota).
 * Nie commitować sekretów (`.env`, klucze, hasła, tokeny, temat ntfy, `logs/`, `session.json`, profil przeglądarki).
 * Gałąź jak w `analyse_data` (stan: `claude/gifted-volta-x1764p`), commit + push, bez PR. Bez identyfikatora modelu
-  AI w commitach/kodzie. Testy: `python -m pytest sniper/tests -q` (240 + 1 pominięty).
+  AI w commitach/kodzie. Testy: `python -m pytest sniper/tests -q` (245 + 1 pominięty).
 
 ## Moduły (`sniper/`)
 
 | plik | rola |
 |---|---|
-| `__main__.py`, `scout.py` | pętle Zwiadowcy – jedna na proxy (`SNIPER_PROXY_ROUTES`, `Lane`, osobne sesje): katalogi po kolei (wagi), nowe ID, przepełnienie strony (brak ofert poprzedniego skanu) → strona 2 + szybszy skan, szczegóły przez to samo proxy, `emit` → evaluator; heartbeat |
+| `__main__.py`, `scout.py` | pętle Zwiadowcy – jedna na proxy (`SNIPER_PROXY_<N>_HOST/_AUTH/_KATEGORIE`, `Lane`, osobne sesje): katalogi po kolei (wagi), nowe ID, przepełnienie strony (brak ofert poprzedniego skanu) → strona 2 + dodatkowe skany TEGO katalogu co `SNIPER_POLL_MIN`, szczegóły przez to samo proxy, `emit` → evaluator; heartbeat |
 | `categories.py` | katalogi z `guides/catalogs.json`, `apply_floor` (`SNIPER_PRICE_FLOOR`), `schedule`, kategoria z tytułu, sprzęt do testu |
 | `session.py`, `proxy_relay.py`, `traffic.py` | httpx przez proxy, odświeżanie ciastek Playwrightem, licznik transferu |
+| `fx.py` | kursy walut (wysyłka → zł) z pliku prebid, którego używa Vinted; co `SNIPER_FX_REFRESH_H` h, bez proxy |
 | `extractor.py` | JSON → `Offer`; wysyłka w zł (`FX_TO_PLN`), kraj z waluty wysyłki |
 | `config.py` | całe `.env` (`ScoutConfig`, `AiConfig` z `SNIPER_RULE_*`, `MODEL_PRICES`) |
 | `evaluator.py` | `submit` (już widziana, słowa, bramka, limit $) → backend Gemini/Anthropic/OpenRouter (`Task`) → `enforce_profit_rule`, PL +1 → logi, raport, mail, ntfy |

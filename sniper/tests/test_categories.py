@@ -506,7 +506,7 @@ def test_cap_without_market_data(tmp_path):
     nomem = cap_without_market_data({"score": 9.0, "is_deal": True}, phone(title="iPhone 13 stan bdb"), book, 7)
     assert nomem["score"] == 9.0                                       # wiersz bez pojemności też się liczy
     lap = cap_without_market_data({"score": 9.0, "is_deal": True}, laptop(category="laptop", title="Dell XPS"), book, 7)
-    assert lap["score"] == 9.0                                         # laptopy mają też guidelines.md
+    assert lap["score"] == 7.0                                         # laptopy bez danych też (30.10)
 
 
 def _comparables_db(path, rows):
@@ -658,7 +658,7 @@ def test_full_page_of_new_offers_fetches_next_page_and_speeds_up(caplog):
     async def scenario():
         session = VintedSession()
         session.client = httpx.AsyncClient(transport=httpx.MockTransport(handler), headers=session.client.headers)
-        cfg = ScoutConfig(category="3661", catalogs="", per_page=2, price_floor=0, poll_interval=8.0, poll_fast=2.0,
+        cfg = ScoutConfig(category="3661", catalogs="", per_page=2, price_floor=0, poll_interval=8.0, poll_min=2.0,
                           fast_minutes=10.0, gap_pages=1)
         scout = Scout(cfg, session, EmailNotifier(SmtpConfig()))
         inspected = []
@@ -679,9 +679,10 @@ def test_full_page_of_new_offers_fetches_next_page_and_speeds_up(caplog):
     assert list(scout._per_catalog.values()) == [[2, 3, 3, 1]]
     assert "cała strona (2) to nowe oferty" in caplog.text
     lane = scout.lanes["glowne"]
-    assert (lane.interval, lane.current_interval()) == (8.0, 2.0)          # przyspieszone
-    lane.fast_until = time.monotonic() - 1                 # minęło SNIPER_FAST_MINUTES
-    assert scout._interval(lane) == 8.0 and lane.fast_until == 0.0
+    (spec, until), = lane.fast.values()                    # przyspieszony tylko ten katalog
+    assert spec.catalog_id == "3661" and lane.min_interval == 2.0
+    scout._expire_fast(lane, until + 1)                    # minęło SNIPER_FAST_MINUTES
+    assert lane.fast == {}
 
 
 def test_tokens_foreign_letters_and_frequent_brand(tmp_path):

@@ -63,42 +63,55 @@ def _proxy_url(prefix):
 
 
 # ---------------------------------------------------------------------------
-# Kilka proxy naraz (2026-10-30, prośba użytkownika): kategorie przypisane do proxy w SNIPER_PROXY_ROUTES, każde proxy
-# = osobna sesja Vinted (ciastka, tokeny) i osobna pętla skanu z własnym tempem. Główne proxy (SNIPER_PROXY_HOST /
-# _AUTH / _URL) ma nazwę MAIN_PROXY; kategorie bez wpisu idą przez nie.
+# Kilka proxy naraz (2026-10-30, prośba użytkownika): główne proxy (SNIPER_PROXY_HOST / _AUTH / _URL, nazwa MAIN_PROXY)
+# + dodatkowe numerowane 2..9: SNIPER_PROXY_2_HOST + SNIPER_PROXY_2_AUTH (albo SNIPER_PROXY_2_URL) i
+# SNIPER_PROXY_2_KATEGORIE=phone,console - te kategorie skanuje TYLKO to proxy (osobna sesja Vinted i osobna pętla
+# skanu z własnym tempem). Kategorie bez przypisania idą przez główne.
 # ---------------------------------------------------------------------------
 MAIN_PROXY = "glowne"
+EXTRA_PROXIES = range(2, 10)
+# Nazwy kategorii po polsku też działają (SNIPER_PROXY_2_KATEGORIE=telefony,konsole).
+CATEGORY_ALIASES = {"laptopy": "laptop", "telefony": "phone", "tablety": "tablet", "konsole": "console",
+                    "karty": "gpu", "karty graficzne": "gpu", "pamieci": "ram", "pamięci": "ram", "dyski": "storage"}
 
 
 def _proxy_key(name):
-    """Nazwa proxy z SNIPER_PROXY_ROUTES → część nazwy zmiennej: „dataimpulse” → „DATAIMPULSE”."""
-    return re.sub(r"[^A-Za-z0-9]", "_", name).upper()
+    """Nazwa proxy → część nazwy zmiennej: „2” → „2”, „di” → „DI”."""
+    return re.sub(r"[^A-Za-z0-9]", "_", str(name)).upper()
 
 
-def parse_proxy_routes(text):
-    """'phone:di, console:di, 3582:web' → {'phone': 'di', 'console': 'di', '3582': 'web'} (klucz: kategoria albo
-    numer katalogu, wartość: nazwa proxy; małe litery). Błędny wpis pomijany z ostrzeżeniem."""
+def parse_categories(text):
+    """'telefony, console, 3582' → ['phone', 'console', '3582'] (kategoria albo numer katalogu)."""
+    out = []
+    for part in (p.strip().lower() for p in (text or "").split(",")):
+        if part:
+            out.append(CATEGORY_ALIASES.get(part, part))
+    return out
+
+
+def proxy_routes_from_env():
+    """{kategoria albo numer katalogu: nazwa proxy} z SNIPER_PROXY_<N>_KATEGORIE (N = 2..9)."""
     routes = {}
-    for part in (p.strip() for p in (text or "").split(",")):
-        if not part:
+    for n in EXTRA_PROXIES:
+        categories = parse_categories(_env(f"SNIPER_PROXY_{n}_KATEGORIE"))
+        if not categories:
+            if _env(f"SNIPER_PROXY_{n}_HOST") or _env(f"SNIPER_PROXY_{n}_URL"):
+                logging.getLogger("sniper.config").warning(
+                    "[PROXY] Proxy %d ma adres, ale brak SNIPER_PROXY_%d_KATEGORIE - nieużywane.", n, n)
             continue
-        key, sep, name = (x.strip().lower() for x in part.partition(":"))
-        if not sep or not key or not re.fullmatch(r"[a-z0-9_]+", name):
-            logging.getLogger("sniper.config").warning("[PROXY] Pomijam błędny wpis SNIPER_PROXY_ROUTES: %r "
-                                                       "(wzór: kategoria:nazwa_proxy)", part)
-            continue
-        routes[key] = name
+        for category in categories:
+            routes[category] = str(n)
     return routes
 
 
 def extra_proxy_url(name):
-    """URL dodatkowego proxy: SNIPER_PROXY_<NAZWA>_HOST + SNIPER_PROXY_<NAZWA>_AUTH albo SNIPER_PROXY_<NAZWA>_URL
+    """URL dodatkowego proxy: SNIPER_PROXY_<N>_HOST + SNIPER_PROXY_<N>_AUTH albo SNIPER_PROXY_<N>_URL
     ("" = brak). Główne (MAIN_PROXY) - jak dotąd z SNIPER_PROXY_HOST / _AUTH / _URL."""
     return build_proxy_url() if name == MAIN_PROXY else _proxy_url(f"SNIPER_PROXY_{_proxy_key(name)}")
 
 
 def proxy_poll_interval(name, default):
-    """Odstęp między skanami pętli danego proxy (s): SNIPER_PROXY_<NAZWA>_POLL, inaczej `default`."""
+    """Odstęp między skanami pętli danego proxy (s): SNIPER_PROXY_<N>_POLL, inaczej `default`."""
     if name == MAIN_PROXY:
         return default
     return _env_float(f"SNIPER_PROXY_{_proxy_key(name)}_POLL", default)
@@ -576,18 +589,20 @@ class ScoutConfig:
     # Odstęp między STARTAMI kolejnych skanów katalogu: 15 s = 4 skany na minutę (oszczędza transfer proxy)
     poll_interval: float = _env_float("SNIPER_POLL_INTERVAL", 15.0)
     poll_jitter: float = _env_float("SNIPER_POLL_JITTER", 1.0)       # losowe odchylenie +/- jitter sekund
-    # Kilka proxy (2026-10-30): „kategoria:nazwa_proxy” po przecinku, np. „phone:di, console:di, laptop:web”; każda
-    # nazwa = SNIPER_PROXY_<NAZWA>_HOST + _AUTH (albo _URL) i opcjonalnie _POLL (odstęp skanów tej pętli, s).
-    # Kategorie bez wpisu idą przez główne proxy (SNIPER_PROXY_HOST / _AUTH). Puste = jedno proxy, jak dotąd.
-    proxy_routes: str = _env("SNIPER_PROXY_ROUTES")
+    # Dodatkowe proxy i ich kategorie (SNIPER_PROXY_<N>_KATEGORIE, patrz proxy_routes_from_env); puste = jedno proxy.
+    proxy_routes: dict = field(default_factory=proxy_routes_from_env)
     # Przyspieszanie (2026-10-30, prośba użytkownika): gdy w skanie katalogu nie ma ŻADNEJ z `overlap_ids` najnowszych
-    # ofert z poprzedniego skanu tego katalogu, przyszło więcej ofert, niż mieści strona → dociągamy do `gap_pages`
-    # kolejnych stron (żeby nic nie umknęło) i pętla tego proxy skanuje co `poll_fast` s przez `fast_minutes` minut
-    # od ostatniego takiego skanu. poll_fast 0 = połowa zwykłego odstępu (min. 1,5 s); fast_minutes 0 = bez zmiany tempa.
+    # ofert z poprzedniego skanu tego katalogu (przyszło więcej, niż mieści strona), dociągamy do `gap_pages` kolejnych
+    # stron (nic nie umyka), a TEN katalog (nie całe proxy) jest skanowany co `poll_min` s przez `fast_minutes` minut
+    # od ostatniego takiego skanu. poll_min = minimalny odstęp między dwoma skanami jednego proxy (także przy
+    # przyspieszeniu); fast_minutes 0 = bez przyspieszania.
     overlap_ids: int = _env_int("SNIPER_OVERLAP_IDS", 5)
     gap_pages: int = _env_int("SNIPER_GAP_PAGES", 1)
-    poll_fast: float = _env_float("SNIPER_POLL_FAST", 0.0)
+    poll_min: float = _env_float("SNIPER_POLL_MIN", _env_float("SNIPER_POLL_FAST", 3.0))
     fast_minutes: float = _env_float("SNIPER_FAST_MINUTES", 10.0)
+    # Kursy walut (wysyłka w walucie sprzedawcy → zł) z pliku, którego używa Vinted (sniper/fx.py): co tyle godzin;
+    # 0 = tylko kursy stałe (FX_TO_PLN / SNIPER_FX_RATES).
+    fx_refresh_h: float = _env_float("SNIPER_FX_REFRESH_H", 12.0)
     heartbeat_interval: float = _env_float("SNIPER_HEARTBEAT", 60.0)  # co ile sekund log "żyję" (0 = wyłączony)
     max_concurrent_details: int = _env_int("SNIPER_MAX_CONCURRENT_DETAILS", 5)
     request_timeout: float = _env_float("SNIPER_REQUEST_TIMEOUT", 10.0)

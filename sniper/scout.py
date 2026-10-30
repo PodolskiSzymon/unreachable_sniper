@@ -20,7 +20,7 @@ import httpx
 from .categories import (AI_ENABLED_NAMES, CatalogSource, CatalogSpec, apply_floor, apply_weights, category_for,
                          parse_weights, schedule, wanted_specs)
 from .config import (CATALOG_ONLY_HEADERS, CATALOG_URL, MAIN_PROXY, SHIPPING_URL, SIDEBAR_URL, ScoutConfig,
-                     get_catalog_params, parse_proxy_routes, proxy_poll_interval)
+                     get_catalog_params, proxy_poll_interval)
 from .dedup import RecentIds
 from .extractor import build_offer, inactive_reason, item_url, unwrap_sidebar
 from .notifier import EmailNotifier
@@ -66,31 +66,45 @@ def _to_float(value):
         return None
 
 
+def spec_key(spec):
+    return (spec.catalog_id, spec.price_from, spec.price_to)
+
+
 @dataclass
 class Lane:
     """Pętla skanu przez jedno proxy (2026-10-30): własna sesja Vinted (ciastka, tokeny), swoje katalogi
-    (SNIPER_PROXY_ROUTES) i tempo; przyspiesza, gdy ofert przybywa szybciej, niż mieści strona."""
+    (SNIPER_PROXY_<N>_KATEGORIE) i tempo. Zwykle jeden skan co `interval` (katalogi po kolei wg wag); katalog, w którym
+    strona się przepełnia, dostaje DODATKOWE skany co `min_interval` - pozostałe katalogi bez zmian."""
     name: str
     session: object
     interval: float               # zwykły odstęp między skanami (s)
-    fast_interval: float          # odstęp po przepełnieniu (s)
-    cycle: list = field(default_factory=list)      # kolejka skanów bieżącego cyklu (categories.schedule)
-    fast_until: float = 0.0       # time.monotonic(), do kiedy przyspieszone
+    min_interval: float           # minimalny odstęp między dwoma skanami tego proxy (s) = tempo przyspieszonego katalogu
+    cycle: list = field(default_factory=list)      # kolejka zwykłych skanów bieżącego cyklu (categories.schedule)
+    next_normal: float = 0.0      # time.monotonic() następnego zwykłego skanu
+    last_request: float = float("-inf")
+    last_scan: dict = field(default_factory=dict)  # katalog → kiedy ostatnio skanowany
+    fast: dict = field(default_factory=dict)       # katalog → (CatalogSpec, do kiedy przyspieszony)
     gap_pages: int = 0            # dociągnięte strony od ostatniego heartbeatu
 
     @property
     def label(self):
         return f"proxy {self.name}"
 
-    def current_interval(self, now=None):
-        return self.fast_interval if self.fast_until > (time.monotonic() if now is None else now) else self.interval
+    def next_scan(self, now):
+        """→ (kiedy, CatalogSpec przyspieszonego katalogu albo None = zwykły następny z harmonogramu)."""
+        when, extra = self.next_normal, None
+        for key, (spec, _until) in self.fast.items():
+            due = self.last_scan.get(key, float("-inf")) + self.min_interval
+            if due < when:
+                when, extra = due, spec
+        return max(when, self.last_request + self.min_interval, now), extra
 
 
 class Scout:
     def __init__(self, cfg: ScoutConfig, session: VintedSession, notifier: EmailNotifier, evaluator=None, buyer=None,
                  sessions=None):
         """session - główne proxy (SNIPER_PROXY_HOST / _AUTH); sessions - {nazwa: VintedSession} dodatkowych proxy
-        z SNIPER_PROXY_ROUTES (każde = osobna pętla skanu)."""
+        z SNIPER_PROXY_<N>_KATEGORIE (każde = osobna pętla skanu)."""
         self.cfg = cfg
         self.session = session
         self.notifier = notifier
@@ -101,14 +115,14 @@ class Scout:
         single = CatalogSpec(cfg.catalog_id, cfg.price_from, cfg.price_to)
         guides_dir = getattr(cfg.ai, "guides_dir", None)
         self.catalogs = CatalogSource(cfg.catalogs, guides_dir, single)
-        self.routes = parse_proxy_routes(getattr(cfg, "proxy_routes", ""))
+        self.routes = {key: str(name).lower() for key, name in dict(getattr(cfg, "proxy_routes", None) or {}).items()}
         self.lanes = {MAIN_PROXY: self._lane(MAIN_PROXY, session)}
         for name, extra in (sessions or {}).items():
             if name != MAIN_PROXY:
                 self.lanes[name] = self._lane(name, extra)
         missing = sorted(set(self.routes.values()) - set(self.lanes))
         if missing:
-            log.warning("[SCOUT] SNIPER_PROXY_ROUTES: brak działającego proxy %s - jego kategorie idą przez główne.",
+            log.warning("[SCOUT] Brak działającego proxy %s - jego kategorie idą przez główne.",
                         ", ".join(missing))
         self._last_ids = {}       # katalog i zakres cen → najnowsze ID z poprzedniego skanu (przepełnienie strony)
         self._warm = set()        # katalogi po rozgrzewce
@@ -155,12 +169,11 @@ class Scout:
     # ------------------------------------------------------------------ proxy (pętle skanu)
     def _lane(self, name, session):
         interval = proxy_poll_interval(name, self.cfg.poll_interval)
-        fast = getattr(self.cfg, "poll_fast", 0.0) or max(1.5, interval / 2)
-        return Lane(name, session, interval, min(fast, interval))
+        return Lane(name, session, interval, min(getattr(self.cfg, "poll_min", 3.0) or interval, interval))
 
     def lane_for(self, spec):
-        """Pętla (proxy) katalogu: wpis SNIPER_PROXY_ROUTES dla numeru katalogu albo jednej z jego kategorii (katalog
-        mieszany - pierwsza z przypisanym proxy), inaczej główne proxy."""
+        """Pętla (proxy) katalogu: przypisanie (SNIPER_PROXY_<N>_KATEGORIE) numeru katalogu albo jednej z jego kategorii
+        (katalog mieszany - pierwsza z przypisanym proxy), inaczej główne proxy."""
         if spec is not None and self.routes:
             for key in (str(spec.catalog_id), *spec.categories):
                 lane = self.lanes.get(self.routes.get(key))
@@ -175,24 +188,24 @@ class Scout:
             lane.cycle = schedule([s for s in self.active_specs() if self.lane_for(s) is lane])
         return lane.cycle.pop(0) if lane.cycle else None
 
-    def _speed_up(self, lane):
-        """Przepełnienie strony → pętla tego proxy skanuje co `fast_interval` przez `fast_minutes` od ostatniego."""
+    def _speed_up(self, lane, spec):
+        """Przepełnienie strony → TEN katalog dostaje dodatkowe skany co `min_interval` przez `fast_minutes` minut od
+        ostatniego przepełnienia (inne katalogi tego proxy bez zmian - prośba użytkownika 2026-10-30)."""
         minutes = getattr(self.cfg, "fast_minutes", 0.0)
-        if not minutes or lane.fast_interval >= lane.interval:
+        if not minutes or lane.min_interval >= lane.interval:
             return False
-        now = time.monotonic()
-        if lane.fast_until <= now:
-            log.info("[SCOUT] %s: przyspieszam - skan co %g s (zwykle %g s) przez %g min od ostatniego przepełnienia.",
-                     lane.label, lane.fast_interval, lane.interval, minutes)
-        lane.fast_until = now + minutes * 60
+        key = spec_key(spec)
+        if key not in lane.fast:
+            log.info("[SCOUT] %s: przyspieszam %s - skan co %g s przez %g min od ostatniego przepełnienia.",
+                     lane.label, spec.label, lane.min_interval, minutes)
+        lane.fast[key] = (spec, time.monotonic() + minutes * 60)
         return True
 
-    def _interval(self, lane):
-        now = time.monotonic()
-        if lane.fast_until and lane.fast_until <= now:
-            lane.fast_until = 0.0
-            log.info("[SCOUT] %s: spokojniej - skan znów co %g s.", lane.label, lane.interval)
-        return lane.current_interval(now)
+    def _expire_fast(self, lane, now):
+        for key, (spec, until) in list(lane.fast.items()):
+            if until <= now:
+                del lane.fast[key]
+                log.info("[SCOUT] %s: spokojniej w %s - znów zwykłe tempo.", lane.label, spec.label)
 
     # ------------------------------------------------------------------ katalog
     async def _fetch_page(self, lane, spec, page=1):
@@ -222,7 +235,7 @@ class Scout:
             await lane.session.refresh()
             return
 
-        key = (spec.catalog_id, spec.price_from, spec.price_to)
+        key = spec_key(spec)
         previous = self._last_ids.get(key)
         self._last_ids[key] = [it["id"] for it in items[:max(1, getattr(self.cfg, "overlap_ids", 5))]]
         # Rosnąco po ID, żeby RecentIds wypychał najstarsze oferty jako pierwsze.
@@ -241,13 +254,13 @@ class Scout:
 
     async def _overflow(self, lane, spec, previous, counts, page_size):
         """Przepełnienie strony (prośba użytkownika 2026-10-30): dociągnij kolejne strony aż do oferty z poprzedniego
-        skanu (SNIPER_GAP_PAGES, żeby nic nie umknęło) i przyspiesz pętlę tego proxy (SNIPER_POLL_FAST)."""
+        skanu (SNIPER_GAP_PAGES, żeby nic nie umknęło) i przyspiesz TEN katalog (SNIPER_POLL_MIN)."""
         pages = max(0, int(getattr(self.cfg, "gap_pages", 0)))
-        faster = self._speed_up(lane)
+        faster = self._speed_up(lane, spec)
         log.warning("[SCOUT] %s: brak żadnej z %d ofert poprzedniego skanu - cała strona (%d) to nowe oferty%s%s.",
                     spec.label, len(previous), page_size,
                     f", dociągam kolejne strony (najwyżej {pages})" if pages else " - część mogła umknąć",
-                    f"; skan co {lane.fast_interval:g} s" if faster else "")
+                    f"; ten katalog co {lane.min_interval:g} s" if faster else "")
         wanted = set(previous)
         for page in range(2, 2 + pages):
             data = await self._fetch_page(lane, spec, page)
@@ -303,8 +316,13 @@ class Scout:
             self._skip("błąd detali")
             return
         if isinstance(shipping, Exception):
-            log.warning("[SCOUT] Brak shipping_details dla %s: %r", item_id, shipping)
-            shipping = None
+            # Bez wysyłki koszt byłby zaniżony (z Finlandii bywa > 100 zł) - jeszcze jedna próba (nowe IP).
+            try:
+                shipping = await session.get_json(SHIPPING_URL.format(item_id=item_id), referer=referer)
+            except Exception as exc:
+                log.warning("[SCOUT] Brak shipping_details dla %s: %r - koszt bez wysyłki, ocena najwyżej 7.",
+                            item_id, exc)
+                shipping = None
 
         sidebar = unwrap_sidebar(sidebar)
         reason = inactive_reason(sidebar)
@@ -391,37 +409,49 @@ class Scout:
         if len(lanes) > 1 or self.routes:
             for lane in lanes:
                 mine = [s for s in specs if self.lane_for(s) is lane]
-                log.info("[SCOUT] %s: skan co %g s (przy przepełnieniu co %g s): %s", lane.label, lane.interval,
-                         lane.fast_interval, "; ".join(s.label for s in mine) or "brak katalogów")
+                log.info("[SCOUT] %s: skan co %g s (katalog z przepełnioną stroną co %g s): %s", lane.label,
+                         lane.interval, lane.min_interval, "; ".join(s.label for s in mine) or "brak katalogów")
         # Pętle dodatkowych proxy startują z losowym przesunięciem - bez równoczesnych zapytań co cykl.
         await asyncio.gather(*(self._run_lane(lane, 0.0 if lane.name == MAIN_PROXY else random.uniform(0, lane.interval))
                                for lane in lanes))
 
     async def _run_lane(self, lane, first_delay=0.0):
-        """Nieskończona pętla skanu jednego proxy: katalogi po kolei (wagi), odstęp lane.interval (po przepełnieniu
-        lane.fast_interval), własny backoff - błąd jednego proxy nie zatrzymuje pozostałych."""
+        """Nieskończona pętla skanu jednego proxy: zwykłe skany co lane.interval (katalogi po kolei wg wag) + dodatkowe
+        skany przyspieszonych katalogów co lane.min_interval; własny backoff - błąd jednego proxy nie zatrzymuje
+        pozostałych."""
         backoff = 0.0
         # Sesja z poprzedniego uruchomienia oszczędza wizytę przeglądarki; jeśli wygasła, pierwszy skan
         # dostanie 401/403 i get_json sam ją odświeży.
         needs_refresh = not lane.session.load_state(self.cfg.session_max_age_min * 60)
         if first_delay:
             await asyncio.sleep(first_delay)
+        lane.next_normal = time.monotonic()
         idle = False
         while True:
+            now = time.monotonic()
+            self._expire_fast(lane, now)
+            when, spec = lane.next_scan(now)
+            if when > now:
+                await asyncio.sleep(when - now)
             started = time.monotonic()
-            spec = None
             try:
-                spec = self.next_spec(lane)
+                if spec is None:
+                    spec = self.next_spec(lane)
+                    interval = lane.interval
+                    jitter = min(self.cfg.poll_jitter, interval / 3)
+                    # Stałe tempo liczone od startu skanu: czas zapytania nie wydłuża odstępu.
+                    lane.next_normal = started + (interval + random.uniform(-jitter, jitter) if spec else IDLE_RECHECK_S)
                 if spec is None:
                     if not idle:
-                        log.info("[SCOUT] %s: brak katalogów do skanowania (SNIPER_PROXY_ROUTES / SNIPER_CATEGORIES) - "
-                                 "sprawdzam co %.0f s.", lane.label, IDLE_RECHECK_S)
+                        log.info("[SCOUT] %s: brak katalogów do skanowania (SNIPER_PROXY_<N>_KATEGORIE / "
+                                 "SNIPER_CATEGORIES) - sprawdzam co %.0f s.", lane.label, IDLE_RECHECK_S)
                     idle = True
                 else:
                     idle = False
                     if needs_refresh:
                         await lane.session.refresh()
                         needs_refresh = False
+                    lane.last_request = lane.last_scan[spec_key(spec)] = time.monotonic()
                     await self.poll_catalog(spec, lane)
                 backoff = 0.0
             except RateLimited:
@@ -448,14 +478,7 @@ class Scout:
             self._heartbeat()
             if backoff:
                 await asyncio.sleep(backoff)
-            elif spec is None:
-                await asyncio.sleep(IDLE_RECHECK_S)
-            else:
-                # Stałe tempo liczone od startu skanu: czas zapytania nie wydłuża odstępu.
-                interval = self._interval(lane)
-                jitter = min(self.cfg.poll_jitter, interval / 3)
-                target = interval + random.uniform(-jitter, jitter)
-                await asyncio.sleep(max(0.0, target - (time.monotonic() - started)))
+                lane.next_normal = max(lane.next_normal, time.monotonic())
 
     def _tag(self, lane):
         """Przedrostek logu z nazwą proxy - tylko gdy pętli jest kilka."""
@@ -479,10 +502,11 @@ class Scout:
                 for label, c in self._per_catalog.items()), self.cfg.per_page)
         now = time.monotonic()
         lanes = list(self.lanes.values())
-        if len(lanes) > 1 or any(lane.fast_until > now or lane.gap_pages for lane in lanes):
+        if len(lanes) > 1 or any(lane.fast or lane.gap_pages for lane in lanes):
             log.info("[SCOUT] Proxy (tempo skanu): %s", " | ".join(
-                f"{lane.name} co {lane.current_interval(now):g} s"
-                + (f" PRZYSPIESZONE jeszcze {(lane.fast_until - now) / 60:.0f} min" if lane.fast_until > now else "")
+                f"{lane.name} co {lane.interval:g} s"
+                + "".join(f"; {spec.label.split(' ', 2)[1]} co {lane.min_interval:g} s jeszcze "
+                          f"{max(until - now, 0) / 60:.0f} min" for spec, until in lane.fast.values())
                 + (f", dociągnięte strony {lane.gap_pages}" if lane.gap_pages else "") for lane in lanes))
             for lane in lanes:
                 lane.gap_pages = 0

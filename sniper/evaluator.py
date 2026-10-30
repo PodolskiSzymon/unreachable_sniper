@@ -397,9 +397,10 @@ def enforce_profit_rule(evaluation, offer, cfg, comps=None):
 def cap_without_market_data(evaluation, offer, guides, cap, comps=None):
     """Oferta bez pasującego wiersza tabeli (ani ściśle, ani bez pojemności): cena sprzedaży to tylko domysł AI -
     ocena najwyżej `cap` (2026-10-26: Game Boy Color „re-shell” 9/10 przy wartości 850 zł wziętej z niczego).
-    Laptopy bez limitu - mają też ręczne wytyczne użytkownika (guidelines.md)."""
+    Także laptopy (2026-10-30, użytkownik: watch zbiera je już od 300 zł; wcześniej były zwolnione - alert Asusa
+    i3 za ~457 zł bez danych)."""
     category = getattr(offer, "category", None)
-    if not cap or category in (None, "laptop") or evaluation["score"] <= cap:
+    if not cap or category is None or evaluation["score"] <= cap:
         return evaluation
     if comps or guides.match(category, offer.title) or guides.match(category, offer.title, relaxed=True):
         return evaluation                             # są dane: wiersz tabeli albo podobne oferty z bazy
@@ -408,6 +409,18 @@ def cap_without_market_data(evaluation, offer, guides, cap, comps=None):
     evaluation.setdefault("red_flags", []).append(
         f"Program: brak tego modelu w danych rynku - cena sprzedaży {evaluation.get('market_value_pln') or '?'} zł to "
         f"szacunek AI, ocena najwyżej {cap:g}")
+    return evaluation
+
+
+def cap_without_shipping(evaluation, offer, cap=7.0):
+    """Brak kosztu wysyłki (shipping_details nie przyszło) = koszt zaniżony - z zagranicy wysyłka bywa > 100 zł
+    (użytkownik 2026-10-30) → ocena najwyżej `cap`, z flagą do ręcznego sprawdzenia."""
+    if getattr(offer, "shipping", None) is not None or evaluation["score"] <= cap:
+        return evaluation
+    evaluation.setdefault("score_ai", evaluation["score"])
+    evaluation["score"] = float(cap)
+    evaluation.setdefault("red_flags", []).append(
+        f"Program: brak kosztu wysyłki - koszt bez wysyłki, ocena najwyżej {cap:g}; sprawdź wysyłkę w ofercie")
     return evaluation
 
 
@@ -1107,6 +1120,7 @@ class OfferEvaluator:
             cap_without_market_data(evaluation, offer, self.guides, getattr(self.cfg, "no_data_max_score", 7.0),
                                     comps)
             apply_pl_bonus(evaluation, offer, getattr(self.cfg, "pl_bonus", 0))
+        cap_without_shipping(evaluation, offer)
         log.info("[AI] %s | %s/10%s | %s | zysk ~%s zł%s | zdjęcia: wysłane %d, AI widzi %d | %s", offer.id,
                  f"{evaluation['score']:g}", " OKAZJA" if evaluation["is_deal"] else "",
                  evaluation["gpu_model"] or evaluation["laptop_model"] or "model ?",

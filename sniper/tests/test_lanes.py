@@ -8,8 +8,8 @@ import httpx
 
 import sniper.session as sess
 from sniper.categories import CatalogSpec
-from sniper.config import (MAIN_PROXY, ScoutConfig, SmtpConfig, extra_proxy_url, parse_proxy_routes,
-                           proxy_poll_interval)
+from sniper.config import (MAIN_PROXY, ScoutConfig, SmtpConfig, extra_proxy_url, proxy_poll_interval,
+                           proxy_routes_from_env)
 from sniper.notifier import EmailNotifier
 from sniper.scout import Scout
 from sniper.session import VintedSession
@@ -25,36 +25,41 @@ def _catalog(ids):
     return httpx.Response(200, json={"items": [{"id": i, "title": "iPhone 13", "user": {}} for i in ids]})
 
 
-def test_extra_proxy_from_env(monkeypatch):
-    monkeypatch.setenv("SNIPER_PROXY_DI_HOST", "gw.dataimpulse.com:823")
-    monkeypatch.setenv("SNIPER_PROXY_DI_AUTH", "login__cr.pl:has@lo")
-    monkeypatch.setenv("SNIPER_PROXY_DI_POLL", "3")
-    monkeypatch.setenv("SNIPER_PROXY_WEB_URL", "http://u:p@p.webshare.io:80")
+def test_extra_proxy_from_env(monkeypatch, caplog):
+    """Dodatkowe proxy = adres, login:hasło i kategorie (SNIPER_PROXY_2_*); polskie nazwy kategorii też działają."""
+    monkeypatch.setenv("SNIPER_PROXY_2_HOST", "gw.dataimpulse.com:823")
+    monkeypatch.setenv("SNIPER_PROXY_2_AUTH", "login__cr.pl:has@lo")
+    monkeypatch.setenv("SNIPER_PROXY_2_KATEGORIE", "telefony, Console")
+    monkeypatch.setenv("SNIPER_PROXY_2_POLL", "3")
+    monkeypatch.setenv("SNIPER_PROXY_3_URL", "http://u:p@p.webshare.io:80")
+    monkeypatch.setenv("SNIPER_PROXY_3_KATEGORIE", "3582")
+    monkeypatch.setenv("SNIPER_PROXY_4_HOST", "zapas:1")                # adres bez kategorii - nieużywane
     monkeypatch.setenv("SNIPER_PROXY_HOST", "geo.iproyal.com:12321")
     monkeypatch.setenv("SNIPER_PROXY_AUTH", "LOGIN:HASLO_country-pl")
-    assert parse_proxy_routes("phone:DI, console:di, 3582:web, zle, :x, laptop:a-b") == {
-        "phone": "di", "console": "di", "3582": "web"}               # błędne wpisy pominięte
-    assert extra_proxy_url("di") == "http://login__cr.pl:has%40lo@gw.dataimpulse.com:823"
-    assert extra_proxy_url("web") == "http://u:p@p.webshare.io:80"
-    assert extra_proxy_url("brak") == ""
+    with caplog.at_level(logging.WARNING):
+        assert proxy_routes_from_env() == {"phone": "2", "console": "2", "3582": "3"}
+    assert "SNIPER_PROXY_4_KATEGORIE" in caplog.text
+    assert extra_proxy_url("2") == "http://login__cr.pl:has%40lo@gw.dataimpulse.com:823"
+    assert extra_proxy_url("3") == "http://u:p@p.webshare.io:80"
+    assert extra_proxy_url("5") == ""
     assert extra_proxy_url(MAIN_PROXY) == "http://LOGIN:HASLO_country-pl@geo.iproyal.com:12321"
-    assert proxy_poll_interval("di", 7.0) == 3.0 and proxy_poll_interval("web", 7.0) == 7.0
+    assert proxy_poll_interval("2", 7.0) == 3.0 and proxy_poll_interval("3", 7.0) == 7.0
     assert proxy_poll_interval(MAIN_PROXY, 7.0) == 7.0                 # główne: SNIPER_POLL_INTERVAL
 
 
 def test_build_extra_sessions_skips_proxy_without_address(monkeypatch, tmp_path, caplog):
     from sniper.__main__ import build_extra_sessions
 
-    monkeypatch.setenv("SNIPER_PROXY_DI_URL", "http://u:p@gw.dataimpulse.com:823")
-    monkeypatch.delenv("SNIPER_PROXY_WEB_URL", raising=False)
-    monkeypatch.delenv("SNIPER_PROXY_WEB_HOST", raising=False)
-    cfg = ScoutConfig(proxy_routes="phone:di, console:web, laptop:glowne", log_dir=str(tmp_path))
+    monkeypatch.setenv("SNIPER_PROXY_2_URL", "http://u:p@gw.dataimpulse.com:823")
+    monkeypatch.delenv("SNIPER_PROXY_3_URL", raising=False)
+    monkeypatch.delenv("SNIPER_PROXY_3_HOST", raising=False)
+    cfg = ScoutConfig(proxy_routes={"phone": "2", "console": "3"}, log_dir=str(tmp_path))
     with caplog.at_level(logging.INFO):
         sessions = build_extra_sessions(cfg)
     try:
-        assert list(sessions) == ["di"]                                 # web bez adresu, glowne = główne proxy
-        assert sessions["di"]._state_file == tmp_path / "session_di.json"   # osobne ciastka na proxy
-        assert "SNIPER_PROXY_WEB_HOST" in caplog.text and "u:p" not in caplog.text    # bez hasła w logu
+        assert list(sessions) == ["2"]                                  # proxy 3 bez adresu
+        assert sessions["2"]._state_file == tmp_path / "session_2.json"   # osobne ciastka na proxy
+        assert "SNIPER_PROXY_3_HOST" in caplog.text and "u:p" not in caplog.text      # bez hasła w logu
     finally:
         for s in sessions.values():
             asyncio.run(s.close())
@@ -78,7 +83,7 @@ def test_routes_split_catalogs_between_proxies_and_details_follow():
     async def scenario():
         main, di = _session(handler_for("glowne")), _session(handler_for("di"))
         cfg = ScoutConfig(category="3580", catalogs="3580:300-6000, 3661:300-3600, 3025:300-4400", price_floor=0,
-                          proxy_routes="phone:di, console:di", log_dir="")
+                          proxy_routes={"phone": "di", "console": "di"}, log_dir="")
         scout = Scout(cfg, main, EmailNotifier(SmtpConfig()), sessions={"di": di})
         emitted = []
         scout.emit = emitted.append
@@ -126,7 +131,7 @@ def test_overlap_with_previous_scan_keeps_normal_pace():
     scout, inspected = asyncio.run(scenario())
     assert pages == [1, 1] and inspected == [102]
     assert list(scout._per_catalog.values()) == [[2, 1, 1, 0]]
-    assert scout.lanes["glowne"].current_interval() == 8.0
+    assert scout.lanes["glowne"].fast == {}
 
 
 def test_shared_browser_lock_refreshes_one_session_at_a_time(monkeypatch):
@@ -177,7 +182,7 @@ def test_failing_proxy_does_not_stop_other_lanes(monkeypatch):
     async def scenario():
         main, di = _session(ok), _session(broken)
         cfg = ScoutConfig(category="3580", catalogs="3580:300-6000, 3661:300-3600", price_floor=0, log_dir="",
-                          proxy_routes="phone:di", poll_interval=0.02, poll_jitter=0.0, heartbeat_interval=0,
+                          proxy_routes={"phone": "di"}, poll_interval=0.02, poll_min=0.01, poll_jitter=0.0, heartbeat_interval=0,
                           session_max_age_min=0)
         scout = Scout(cfg, main, EmailNotifier(SmtpConfig()), sessions={"di": di})
 
@@ -195,3 +200,40 @@ def test_failing_proxy_does_not_stop_other_lanes(monkeypatch):
     asyncio.run(scenario())
     assert time.monotonic() - started < 5
     assert counts["di"] >= 1 and counts["glowne"] >= 5      # „di” w backoffie (≥ 2 s), główne skanuje co 0,02 s
+
+
+def test_burst_in_one_catalog_speeds_up_only_that_catalog(monkeypatch):
+    """Wysyp telefonów nie przyspiesza RAM-u na tym samym proxy: telefony co SNIPER_POLL_MIN, reszta jak dotąd."""
+    async def fake_tokens(proxy_url=None, wait_ms=0, **kw):
+        return [{"name": "anon_id", "value": "a", "domain": ".vinted.pl", "path": "/"}], {"x-csrf-token": "t"}
+
+    monkeypatch.setattr(sess, "fetch_fresh_tokens", fake_tokens)
+    scans = {"3661": 0, "3584": 0}
+
+    def handler(request):
+        catalog = request.url.params["attribute_ids[catalog]"]
+        scans[catalog] += 1
+        if catalog == "3661":                              # telefony: za każdym razem cała strona nowych
+            return _catalog([1000 * scans[catalog] + i for i in range(2)])
+        return _catalog([7, 6])                            # RAM: spokojnie, te same oferty
+
+    async def scenario():
+        session = _session(handler)
+        cfg = ScoutConfig(category="3580", catalogs="3661:300-3600, 3584:300-2700", price_floor=0, log_dir="",
+                          per_page=2, gap_pages=0, poll_interval=0.2, poll_min=0.02, poll_jitter=0.0,
+                          fast_minutes=10.0, heartbeat_interval=0, session_max_age_min=0)
+        scout = Scout(cfg, session, EmailNotifier(SmtpConfig()))
+
+        async def fake_inspect(item, spec, category):
+            return None
+        scout.inspect = fake_inspect
+        task = asyncio.create_task(scout.run())
+        await asyncio.sleep(1.5)
+        task.cancel()
+        await asyncio.gather(task, return_exceptions=True)
+        await session.close()
+        return scout
+
+    scout = asyncio.run(scenario())
+    assert [spec.catalog_id for spec, _ in scout.lanes["glowne"].fast.values()] == [3661]
+    assert scans["3661"] >= 4 * scans["3584"] and scans["3584"] <= 5     # RAM co ~0,4 s (2 katalogi × 0,2 s)
