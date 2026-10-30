@@ -2,7 +2,7 @@
 
 `SNIPER_CATALOGS` (sniper/.env):
   * `auto` - katalogi i zakresy cen z `<SNIPER_GUIDES_DIR>/catalogs.json`, który generuje analizator
-    (`python -m analyzer sniper-guide` / automat 2× w tygodniu; zmiana pliku działa bez restartu),
+    (`python -m analyzer sniper-guide` / automat co 2 dni; zmiana pliku działa bez restartu),
   * lista `3580:250-6100*3, 3661:100-3600, 3582` - katalog[:cena_od-cena_do][*waga] (bez zakresu =
     SNIPER_PRICE_FROM/TO; waga = ile razy częściej skanowany niż katalog z wagą 1, domyślnie laptopy 3, reszta 1),
   * puste - jak dawniej: jeden katalog `SNIPER_CATALOG` z `SNIPER_PRICE_FROM` / `SNIPER_PRICE_TO`.

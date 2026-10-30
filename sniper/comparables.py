@@ -1,5 +1,5 @@
 """Porównywalne oferty z bazy analizatora (`<SNIPER_GUIDES_DIR>/comparables.db`, budowany przez `python -m analyzer
-sniper-guide` i automat 2× w tygodniu) - 2026-10-26, pomysł użytkownika: zamiast zgadywania ceny przez AI sprawdzić
+sniper-guide` i automat co 2 dni) - 2026-10-26, pomysł użytkownika: zamiast zgadywania ceny przez AI sprawdzić
 medianę podobnych ofert po słowach z tytułu (jak przy laptopach po karcie graficznej).
 
 Dopasowanie (bez sieci, kilka ms na ofertę, tylko do odczytu):

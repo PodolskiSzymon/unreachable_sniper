@@ -643,32 +643,45 @@ def test_scout_queries_with_price_floor():
     assert requests == [("3661", "300"), ("3025", "400")]
 
 
-def test_full_page_of_new_offers_is_reported(caplog):
-    polls = {"n": 0}
+def test_full_page_of_new_offers_fetches_next_page_and_speeds_up(caplog):
+    """Na stronie 1 nie ma żadnej z ofert poprzedniego skanu (przyszło więcej, niż mieści strona) → dociągnięta strona 2
+    aż do pierwszej znanej oferty i szybszy skan (prośba użytkownika 2026-10-30)."""
+    market = [101, 100]                                    # najnowsze pierwsze (newest_first)
+    pages = []
 
     def handler(request):
-        polls["n"] += 1
-        base = 100 * polls["n"]
-        return httpx.Response(200, json={"items": [{"id": base + i, "title": "iPhone", "user": {}} for i in range(2)]})
+        page, per_page = int(request.url.params["page"]), int(request.url.params["per_page"])
+        pages.append(page)
+        ids = market[(page - 1) * per_page: page * per_page]
+        return httpx.Response(200, json={"items": [{"id": i, "title": "iPhone", "user": {}} for i in ids]})
 
     async def scenario():
         session = VintedSession()
         session.client = httpx.AsyncClient(transport=httpx.MockTransport(handler), headers=session.client.headers)
-        cfg = ScoutConfig(category="3661", catalogs="", per_page=2, price_floor=0)
+        cfg = ScoutConfig(category="3661", catalogs="", per_page=2, price_floor=0, poll_interval=8.0, poll_fast=2.0,
+                          fast_minutes=10.0, gap_pages=1)
         scout = Scout(cfg, session, EmailNotifier(SmtpConfig()))
+        inspected = []
 
         async def fake_inspect(item, spec, category):
-            return None
+            inspected.append(item["id"])
         scout.inspect = fake_inspect
-        for _ in range(2):                                 # rozgrzewka + skan z samymi nowymi ofertami
-            await scout.poll_catalog()
+        await scout.poll_catalog()                         # rozgrzewka: pamięta 101, 100
+        market[:0] = [104, 103, 102]                       # 3 nowe oferty przy stronie na 2
+        await scout.poll_catalog()
         await asyncio.gather(*scout._tasks)
         await session.close()
-        return scout
+        return scout, inspected
 
-    scout = asyncio.run(scenario())
-    assert list(scout._per_catalog.values()) == [[2, 2, 2, 1]]
+    scout, inspected = asyncio.run(scenario())
+    assert pages == [1, 1, 2]                              # strona 2 dociągnięta; dalej nie - jest na niej znana 101
+    assert sorted(inspected) == [102, 103, 104]            # 102 była tylko na stronie 2 - bez dociągnięcia by umknęła
+    assert list(scout._per_catalog.values()) == [[2, 3, 3, 1]]
     assert "cała strona (2) to nowe oferty" in caplog.text
+    lane = scout.lanes["glowne"]
+    assert (lane.interval, lane.current_interval()) == (8.0, 2.0)          # przyspieszone
+    lane.fast_until = time.monotonic() - 1                 # minęło SNIPER_FAST_MINUTES
+    assert scout._interval(lane) == 8.0 and lane.fast_until == 0.0
 
 
 def test_tokens_foreign_letters_and_frequent_brand(tmp_path):

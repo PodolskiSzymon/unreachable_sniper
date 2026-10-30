@@ -4,6 +4,7 @@ Ewolucja cookies_management.py / session_management.py: zamiast requests i
 sync_playwright mamy w pełni asynchroniczny klient i async API Playwrighta.
 """
 import asyncio
+import contextlib
 import json
 import logging
 import time
@@ -189,6 +190,9 @@ class VintedSession:
         self._ready.set()
         self._lock = asyncio.Lock()
         self._generation = 0
+        # Wspólna dla kilku sesji (kilka proxy, scout.Scout): przeglądarki odświeżają się po kolei, nie naraz -
+        # serwer ma 4 GB RAM. None = jedna sesja, bez czekania.
+        self.browser_lock = None
         self.traffic = TrafficMeter()
         self.client = httpx.AsyncClient(
             proxy=self._proxy_url,
@@ -208,7 +212,8 @@ class VintedSession:
                 return
             self._ready.clear()
             try:
-                cookies, tokens = await self._fetch_with_retries()
+                async with self.browser_lock or contextlib.nullcontext():
+                    cookies, tokens = await self._fetch_with_retries()
                 self._apply(cookies, tokens)
                 self._save_state(cookies, tokens)
                 log.info("[AUTH] Sesja httpx zaktualizowana (generacja %d).", self._generation)

@@ -1,7 +1,7 @@
 """Wytyczne per kategoria (D5, 2026-10-25): `<SNIPER_GUIDES_DIR>/<kategoria>.md` z analizatora rynku.
 
 * `GuideBook.text(kategoria)` - tekst wytycznych dla modelu AI (komentarze HTML wycięte, plik wczytywany ponownie po
-  zmianie - analizator podmienia go 2× w tygodniu bez restartu Snipera). Laptopy bez `guides/laptop.md` i oferty bez
+  zmianie - analizator podmienia go co 2 dni bez restartu Snipera). Laptopy bez `guides/laptop.md` i oferty bez
   kategorii (dawny tryb jednego katalogu) → dotychczasowy `SNIPER_AI_GUIDELINES` (guidelines.md).
 * `GuideBook.match(kategoria, tytuł)` - „karta rynku”: wiersze tabeli cen pasujące do tytułu (lokalnie, zero kosztów).
   Wiersz pasuje, gdy wszystkie jego słowa są w tytule, a tytuł nie ma słowa wariantu, którego wiersz nie ma

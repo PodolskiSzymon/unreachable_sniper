@@ -99,7 +99,7 @@ Ocena działa w osobnych zadaniach asyncio: limit `SNIPER_AI_MAX_CONCURRENT`, li
 ocena idzie jeszcze raz z samego tekstu.
 
 **Wytyczne**: per kategoria `sniper/guides/<kategoria>.md` (laptop, phone, tablet, console, gpu, ram, storage –
-generuje je analizator rynku `analyse_data` i kopiuje tu 2× w tygodniu; reguła zysku: 40% marży → 300 zł … 20% → 1 100 zł).
+generuje je analizator rynku `analyse_data` i kopiuje tu co 2 dni; reguła zysku: 40% marży → 300 zł … 20% → 1 100 zł).
 Laptopy bez `guides/laptop.md` i tryb jednego katalogu – `sniper/guidelines.md` (albo `SNIPER_AI_GUIDELINES`).
 Kategoria bez pliku wytycznych → oferta pominięta przed AI. Zmiana pliku działa od następnej oceny, bez restartu.
 

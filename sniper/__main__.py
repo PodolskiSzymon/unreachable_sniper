@@ -5,10 +5,49 @@ import logging.handlers
 from pathlib import Path
 from urllib.parse import urlsplit
 
-from .config import ScoutConfig, require_proxy_url
+from .config import (MAIN_PROXY, ScoutConfig, extra_proxy_url, parse_proxy_routes, proxy_env_names,
+                     require_proxy_url)
 from .notifier import EmailNotifier
 from .scout import Scout
 from .session import VintedSession
+
+
+def log_proxy(name, proxy_url):
+    """Adres proxy w logu - bez loginu i hasła (tylko czy są)."""
+    proxy = urlsplit(proxy_url or "")
+    logging.getLogger("sniper").info(
+        "Proxy %s: %s:%s | login: %s | hasło: %s", name, proxy.hostname, proxy.port,
+        "TAK" if proxy.username else "BRAK", "TAK" if proxy.password else "BRAK")
+
+
+def build_session(cfg, proxy_url, state_name="session.json"):
+    """Sesja Vinted przez jedno proxy; ciastka i tokeny zapisywane osobno dla każdego proxy (state_name)."""
+    return VintedSession(
+        proxy_url=proxy_url,
+        timeout=cfg.request_timeout,
+        browser_wait_ms=cfg.browser_wait_ms,
+        refresh_attempts=cfg.refresh_attempts,
+        refresh_retry_delay=cfg.refresh_retry_delay,
+        refresh_timeout=cfg.refresh_timeout,
+        browser_light=cfg.browser_light,
+        state_file=Path(cfg.log_dir) / state_name if cfg.log_dir else None,
+    )
+
+
+def build_extra_sessions(cfg):
+    """Dodatkowe proxy z SNIPER_PROXY_ROUTES → {nazwa: VintedSession}. Proxy bez adresu w .env - błąd w logu, a jego
+    kategorie idą przez główne proxy (Sniper działa dalej)."""
+    sessions = {}
+    for name in sorted(set(parse_proxy_routes(cfg.proxy_routes).values()) - {MAIN_PROXY}):
+        url = extra_proxy_url(name)
+        if not url:
+            logging.getLogger("sniper").error(
+                "[PROXY] SNIPER_PROXY_ROUTES wskazuje proxy „%s”, ale w sniper/.env brak %s - jego kategorie idą przez "
+                "główne proxy.", name, proxy_env_names(name))
+            continue
+        log_proxy(name, url)
+        sessions[name] = build_session(cfg, url, f"session_{name}.json")
+    return sessions
 
 
 def setup_logging(log_dir):
@@ -98,21 +137,9 @@ async def main():
     setup_logging(cfg.log_dir)
     logging.getLogger("sniper").info("Logi zapisuję do: %s", Path(cfg.log_dir).resolve())
     require_proxy_url()  # bez proxy Zwiadowca w ogóle nie startuje (SNIPER_REQUIRE_PROXY)
-    proxy = urlsplit(cfg.proxy_url)
-    logging.getLogger("sniper").info(
-        "Proxy: %s:%s | login: %s | hasło: %s", proxy.hostname, proxy.port,
-        "TAK" if proxy.username else "BRAK", "TAK" if proxy.password else "BRAK")
-
-    session = VintedSession(
-        proxy_url=cfg.proxy_url,
-        timeout=cfg.request_timeout,
-        browser_wait_ms=cfg.browser_wait_ms,
-        refresh_attempts=cfg.refresh_attempts,
-        refresh_retry_delay=cfg.refresh_retry_delay,
-        refresh_timeout=cfg.refresh_timeout,
-        browser_light=cfg.browser_light,
-        state_file=Path(cfg.log_dir) / "session.json" if cfg.log_dir else None,
-    )
+    log_proxy(MAIN_PROXY, cfg.proxy_url)
+    session = build_session(cfg, cfg.proxy_url)
+    extra = build_extra_sessions(cfg)
     notifier = EmailNotifier(cfg.smtp, log_dir=cfg.log_dir)
     evaluator = build_evaluator(cfg, notifier)
     from .push import build_push
@@ -123,7 +150,7 @@ async def main():
         logging.getLogger("sniper").warning("[PUSH] Powiadomienia na telefon wymagają oceny AI (okazja = ocena AI) - "
                                             "bez niej nic nie zostanie wysłane.")
     buyer = await build_buyer(cfg, notifier, evaluator)
-    scout = Scout(cfg, session, notifier, evaluator, buyer)
+    scout = Scout(cfg, session, notifier, evaluator, buyer, sessions=extra)
     from .mirror import build_mirror
     mirror = build_mirror(cfg)
     mirror_task = asyncio.create_task(mirror.run(), name="log-mirror") if mirror else None
@@ -142,6 +169,8 @@ async def main():
         if push:
             await push.drain()
         await session.close()
+        for other in extra.values():
+            await other.close()
         if mirror:
             mirror.sync_once()           # ostatnia kopia przy zamknięciu
 
