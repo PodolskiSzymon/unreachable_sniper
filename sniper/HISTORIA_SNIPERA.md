@@ -1,0 +1,149 @@
+# Vinted Sniper – kontekst projektu (dla nowej rozmowy z Claude)
+
+> **ARCHIWUM (2026-10-30, dawny `CLAUDE.md`):** historia i szczegóły Snipera do 25.10 – sesja konta, auto-zakup
+> (wyłączony), API Vinted, proxy. Aktualny stan całego projektu: `analyse_data/STAN_PROJEKTU.md`. Czytaj tylko po
+> szczegóły (`grep`), np. przy pracy nad `account_session.py`, `buyer.py`, `session.py`.
+
+> **Aktualny stan (2026-10-26) całego projektu – Sniper na serwerze z analizatorem, reguły zysku, wiele kategorii,
+> podobne oferty, pilot, lista niedoskonałości: `PodolskiSzymon/analyse_data` → `STAN_PROJEKTU.md` (gałąź
+> `claude/hopeful-faraday-n33quh`, tak jak tutaj). Ten plik niżej to historia i szczegóły Snipera.**
+
+Stan na 2026-10-02. MVP działa na komputerze użytkownika (Windows, Python 3.12, folder `C:\Users\Szymek\unreachable_sniper`, origin = github.com/PodolskiSzymon/unreachable_sniper; `F:\WEBSCRAPER` to INNY, stary projekt Sniperv2 z osobnym repo - nie mylić):
+wykrywa nowo dodane oferty w kategorii Vinted, sprawdza je, ocenia modelem AI (Gemini lub Claude) wg wytycznych
+użytkownika (`sniper/guidelines.md`) i wysyła mail o okazjach. Moduł AI dodany 2026-10-03 (użytkownik wybrał Gemini z Google AI Studio) – czeka na test u użytkownika.
+
+Rozmawiamy po polsku. Claude **nie ma dostępu do vinted.pl ze swojego środowiska** (sandbox blokuje
+domenę) – wszystko, co dotyka prawdziwego Vinted, uruchamia użytkownik u siebie i wkleja log
+(albo pliki z `sniper/logs/`). Zmiany testujemy lokalnie atrapami (httpx MockTransport, fałszywe proxy,
+Chromium pod Xvfb) i dopiero wtedy wypychamy.
+
+## Uruchomienie
+
+```bash
+pip install -r sniper/requirements.txt
+playwright install chromium          # Zwiadowca (skan przez proxy)
+patchright install chrome            # Google Chrome dla przeglądarki konta (auto-zakup)
+cp sniper/.env.example sniper/.env   # proxy IPRoyal, SMTP Onet, filtry
+python -m sniper.account_session --login   # raz: ręczne logowanie w oknie bota (profil ./profiles/scraper)
+python -m sniper                     # Zwiadowca
+python -m sniper.check_detection     # browserscan + sannysoft w przeglądarce konta, okno do ręcznej oceny
+python -m sniper.notifier            # mail testowy
+python -m sniper.evaluator --last 5  # ocena AI ostatnich ofert z logs/offers.jsonl (płatne wywołania)
+python -m sniper.diagnose            # to samo zapytanie przez przeglądarkę / httpx / requests
+python -m pytest sniper/tests        # testy (bez sieci)
+```
+
+## Architektura (`sniper/`)
+
+| Plik | Rola |
+|---|---|
+| `config.py` | Wszystko z `sniper/.env`; `build_proxy_url()` (wzorzec IPRoyal `http://{auth}@{host}`), `get_catalog_params()`, nagłówki `CATALOG_HEADERS` / `BASE_HEADERS`, `ScoutConfig`, `SmtpConfig`. |
+| `session.py` | `VintedSession`: `httpx.AsyncClient` za proxy; `get_json()` przy 401/403 wstrzymuje ruch i odświeża sesję Playwrightem (headless, przez `ProxyRelay`); próby z limitem czasu; lekki tryb przeglądarki; zapis/odczyt sesji z `logs/session.json`. |
+| `proxy_relay.py` | Lokalny przekaźnik proxy dla Chromium (Chromium nie wysyła loginu/hasła proxy przy HTTPS → `ERR_PROXY_AUTH_UNSUPPORTED`). Dokleja `Proxy-Authorization`, liczy bajty, rozpoznaje 407. |
+| `scout.py` | Pętla: skan katalogu → nowe ID → równolegle sidebar + shipping → odrzuć sprzedane/zarezerwowane/spoza ceny → `emit()` (log, `offers.jsonl`, kolejka `scout.offers`, `evaluator.submit()` albo mail gdy AI wyłączone). Heartbeat co 60 s. |
+| `extractor.py` | Czyste parsowanie JSON → `Offer` (tytuł, cena, opis, `photo_urls` = `full_size_url`, sprzedawca, wysyłka, suma). |
+| `evaluator.py` | `OfferEvaluator`: filtr wstępny (cena, słowa) → backend `GeminiBackend` (`google-genai`, `client.aio.models.generate_content`, zdjęcia `file_uri` = URL albo pobrane bajty, `response_json_schema`, `thinking_level`) lub `AnthropicBackend` (`beta.messages.create`, `output_config.format`, `fallbacks`) – oba bez proxy → `logs/evaluations.jsonl` + `.csv` → mail gdy `score >= SNIPER_AI_MIN_SCORE` albo błąd AI („nieoceniona”). Semafor, timeout, ponowienia; heartbeat z tokenami i kosztem. |
+| `report.py` | Podgląd ocen w przeglądarce `logs/oceny.html`: evaluator po każdej ocenie dopisuje ofertę z `score > SNIPER_AI_REPORT_ABOVE` (domyślnie 5), ostatnie 500; karta = ocena, werdykt, cena łączna vs maks. cena zakupu, wartość rynkowa i zysk wg AI, uzasadnienie, flagi, zdjęcie; filtry/sortowanie/szukaj w JS, auto-odświeżanie co 60 s; teksty sprzedawców escapowane, tylko URL-e http(s). Odbudowa z historii: `python -m sniper.report`; `python -m sniper.report --stats` = podsumowanie `evaluations.jsonl` (statusy, rozkład ocen, najczęstsze powody odrzucenia, top oferty) – „czemu oceny.html puste”. |
+| `mirror.py` | `LogMirror`: co `SNIPER_MIRROR_INTERVAL_MIN` (2) min kopiuje zmienione pliki z `logs/` (oceny.html, sniper.log, evaluations.*, offers.jsonl, mails.csv, session_events.csv, traffic.csv, bought.jsonl – BEZ session.json/profilu) do `SNIPER_MIRROR_DIR` (np. Dysk Google `G:\Mój dysk\sniper`), zapis tmp + `os.replace`; ostatnia kopia przy zamknięciu. Logi dalej powstają lokalnie (rotacja o północy bez blokad klienta Dysku). |
+| `guidelines.md` | Wytyczne użytkownika (progi cen kart RTX), wczytywane ponownie po zmianie. |
+| `push.py` | Push na telefon przez ntfy (`SNIPER_NTFY_TOPIC`, serwer `ntfy.sh`, opcjonalny token): `OfferEvaluator._finish()` woła `push.notify_deal()` dla oceny >= `SNIPER_NTFY_MIN_SCORE` (domyślnie `SNIPER_AI_MIN_SCORE`) NIEZALEŻNIE od maili/auto-zakupu; JSON (tytuł „Okazja X/10: …”, cena z wysyłką, maks. zakup i zysk wg AI, uzasadnienie, `click`+akcja „Otwórz ofertę”, `attach` = 1. zdjęcie), priorytet 5 = osobny kanał Androida → własny dźwięk; httpx bez proxy, w tle; test `python -m sniper.push`. |
+| `experiment.py` | Eksperyment 2026-10-27 (bez maili, nie zmienia Snipera): `python -m sniper.experiment mediany|model --last 50` na ostatnich ocenach z `evaluations.jsonl`. `mediany` = kilka median z `comparables.db` (`Comparables.levels`: szczegółowa → cała rodzina) + ogłoszenie + zdjęcia + wytyczne → AI wycenia samo, może poprawić model (`corrected_model`), brak w medianach → nie okazja; potem `enforce_profit_rule`. `model` = AI tylko rozpoznaje (parametry z pewnością %, warianty a/b przy < 80%), program wycenia każdy wariant (`lookup` / wiersz tabeli), okazja liczona dla gorszego, `upside` dla lepszego, ocena wzorem. Wynik: tabela stara → nowa ocena + `logs/experiment_<tryb>.jsonl`. Zapytania przez `Task` (schemat/instrukcja/normalizacja) w `evaluator.py`. |
+| `notifier.py` | Mail tekst + HTML przez `aiosmtplib` (Onet `smtp.poczta.onet.pl:465`, SSL), wysyłany w tle; sekcja „Ocena AI” i werdykt w temacie; przy auto-zakupie ramka z wynikiem zakupu i link do wiadomości Vinted (anulowanie). |
+| `dedup.py` | `RecentIds`: `deque(maxlen)` + `set`. |
+| `traffic.py` | Licznik transferu przez proxy (katalog / detale / przeglądarka) → heartbeat + `logs/traffic.csv`. |
+| `diagnose.py` | Narzędzie diagnostyczne. |
+| `account.py` | Krok 1 do auto-zakupu: test logowania na konto (`api/v2/banners`, potem strona główna; z domowego IP, bez proxy). |
+| `account_session.py` | Krok 2: osobny program utrzymujący sesję konta 24/7 - **Patchright** (`patchright.async_api`, od 2026-10-09; Zwiadowca w `session.py` i `diagnose.py` zostają na Playwright) + Google Chrome: `launch_profile()` = `launch_persistent_context(user_data_dir=SCRAPER_PROFILE_DIR (domyślnie ./profiles/scraper, względem cwd), channel="chrome", headless=False, no_viewport=True, chromium_sandbox=True)` i NIC więcej (sandbox: bez tego Playwright dodaje `--no-sandbox` – pasek ostrzeżenia w oknie, test 2026-10-09; pasek o `--disable-blink-features=AutomationControlled` ZOSTAJE – to domyślny argument samego Patchrighta, bez niego `navigator.webdriver = true` (sprawdzone 2026-10-09); wynik u użytkownika: browserscan „Normal”, sannysoft wszystko zielone) (bez proxy, UA, nagłówków, init-skryptów, flag – Patchright działa najlepiej domyślnie; test `test_no_antidetect_tweaks_in_account_code` pilnuje); blokada jednego procesu na profil `ProfileLock` (`sniper.lock`, `msvcrt`/`fcntl`) → `ProfileInUseError` z czytelnym komunikatem (`--reset`/`--login` też jej pilnują; dawne kasowanie `SingletonLock` usunięte); losowe przerwy z `DelayConfig`/`KeepalivePacer` w `config.py` (`SCRAPER_*`; pętle sprawdzające co 0,5 s zostają stałe); zrzuty błędów do `logs/`; podtrzymanie przez wejścia na stronę; `open/buy_now_and_get_checkout/focus/finalize_purchase` dla buyera; `finalize_purchase` czeka na załadowanie checkoutu (networkidle + aktywny przycisk `single-checkout-order-summary-purchase-button`), przy wysyłce do punktu bez wybranego punktu klika `h2` „Wybierz punkt odbioru” → „Potwierdź”, potem klika „Zapłać”, sprawdza reakcję (POST z purchase/transaction/payment/checkout w URL – analityka się nie liczy, zmiana URL, ramka captchy/3DS, przycisk zajęty/zniknął) i ponawia do 3 razy; czerwony komunikat walidacji = błąd, nie zakup. |
+| `check_detection.py` | Ręczna kontrola: ta sama `launch_profile()` otwiera browserscan.net/bot-detection i bot.sannysoft.com, czeka na załadowanie, okno do Entera. |
+| `buyer.py` | Krok 3: rdzeń auto-zakupu - `parse_checkout()`, `decide_purchase()` (twarde limity: suma, sztuk/dobę, PL, ocena), rejestr `bought.jsonl`, `attempt_purchase()` po zaakceptowaniu limitów klika „Zapłać” (status `bought`, albo `pay_unconfirmed` gdy brak reakcji – też blokuje ponowny zakup); captchę/potwierdzenie banku robi człowiek w otwartym oknie. CLI `python -m sniper.buyer <url>` nie zamyka przeglądarki do Entera. |
+| `autobuy.py` | Krok 4: `AutoBuyer` w Zwiadowcy (`SNIPER_BUY_ENABLED=true`, wymaga oceny AI i zalogowanego konta): evaluator przekazuje okazję (`is_deal` i `score >= SNIPER_BUY_MIN_SCORE`) zamiast zwykłego maila → kolejka (jeden zakup naraz, `asyncio.Lock` dzieli przeglądarkę z podtrzymaniem sesji) → szybki precheck (rejestr, limit/dobę, cena z wysyłką) → `attempt_purchase()` (limit 240 s, po nim `pay_unconfirmed`) → od razu mail „KUPIONE – sprawdź / anuluj” / „NIEPOTWIERDZONE” / „NIE KUPIONO (powód)”. Przeglądarka konta startuje ze Zwiadowcą – nie uruchamiać wtedy osobno `sniper.account_session` (ten sam profil). |
+| (sesja konta) | **Logowanie WYŁĄCZNIE ręczne w oknie bota** (decyzja użytkownika 2026-10-09; `my_headers.txt`, wgrywanie ciastek, znaczniki `sniper_seeded_headers.txt`/`sniper_own_login.txt` i `SNIPER_ACCOUNT_HEADERS_FILE` usunięte z `account_session` – `account.py` z cURL-em zostaje tylko jako osobne narzędzie diagnostyczne). `start()`: niezalogowany → okno zostaje na stronie głównej, `focus()`, log/print instrukcji; `wait_for_login(timeout)` co `SCRAPER_LOGIN_CHECK_S` (5–10 s) woła `refresh_and_check(navigate=False)` = BEZ `goto` (przeładowanie przerwałoby wpisywanie hasła; wcześniejszy problem) = `_passive_check()`: `/api/v2/banners` z obecnej strony (nazwa → zalogowany; NIE odrzucamy wcześniej po „Zaloguj się” – test u użytkownika 2026-10-09: po zalogowaniu bot nie wykrywał sesji), potem brak „Zaloguj się” + token; gdy `access_token_web` ZMIENI się od poprzedniego sprawdzenia (koniec logowania) → jedno sprawdzenie z `goto`; co ~60 s linia INFO „Czekam na logowanie…” z URL, statusem banners, „Zaloguj się”, tokenem i liczbą kart. Używają tego: `account_session` (start i padnięta sesja w `run_forever`), `buyer` CLI (limit 10 min), `AutoBuyer` (gdy `ready=False` `check_session()` sprawdza pasywnie co 5–10 s, po wykryciu wznawia + mail). `--login` = czysty profil + Enter w konsoli (zostaje). Tylko e-mail + hasło Vinted – logowanie przez Google w oknie bota Google odrzuca (test 2026-10-09). **Sprawdzanie logowania**: `/api/v2/banners` daje 200/`code:0` także GOŚCIOWI – bez nazwy konta liczy się jako zalogowany tylko gdy na stronie nie ma widocznego „Zaloguj się” i jest ciastko `access_token_web` (które Vinted daje też gościom, więc samo nie wystarcza). Tokeny: access 1 h, refresh 7 dni, rotuje przy odświeżeniu – podtrzymanie przez wejścia na stronę. Padnięta sesja: `AutoBuyer.ready=False` + jeden mail; okazje wtedy zwykłym mailem mimo `SNIPER_MAIL_ONLY_PURCHASES`; po zalogowaniu w oknie mail i wznowienie bez restartu. **Podtrzymanie (2026-10-09, po zgłoszeniu „sesja padła po 10-30 min”)**: `next_keepalive_delay()` = min(losowo 15-25 min, exp z JWT `access_token_web` − `SCRAPER_REFRESH_AHEAD_MIN` 2-4 min, min. 60 s) – „refresh ahead of expiry”; `verify_session()` = do `SCRAPER_SESSION_FAIL_CHECKS` (3) prób `refresh_and_check()` co `SCRAPER_SESSION_RETRY_S` (30-60 s), wyjątki = porażka, każda z powodem (`last_reason`) w logu, log „Token konta ważny jeszcze ~X min”; używają go `AutoBuyer.check_session()` (gdy `ready`) i `run_forever`; `_ensure_single_tab()` przed `goto` zamyka dodatkowe karty (rotacja refresh tokenu – dwa odświeżenia naraz = ryzyko unieważnienia sesji; hipoteza, nie potwierdzona); `/session-refresh` czekamy 45 s (było 15). Przyczyna zgłoszonego wylogowania NIEPOTWIERDZONA – poprosić o linie `[KONTO]` z logu. **Dziennik (2026-10-09)**: `SessionJournal` → `logs/session_events.csv` (`;`, utf-8-sig) + linie `[SESJA]`: `zalogowany` (start / wykryte ponowne zalogowanie, `przerwa_min`), `wylogowany` (`powod`=`last_reason`, `sesja_trwala_min`, `token_wazny_min`, `ostatnie_ok_min_temu`), `sprawdzenie_ok`/`sprawdzenie_nieudane` (z `verify_session`); opisy trafiają do maili „padła”/„wróciła”. Maile: `EmailNotifier(log_dir=)` → `logs/mails.csv` (czas, rodzaj oferta/zakup/systemowy, temat, wynik), heartbeat „maile od startu: wysłane N (oferty a, zakupy b, systemowe c)” – licznik jest OD STARTU. **Log użytkownika 2026-10-09**: zalogowanie 14:42 (wykryte przez zmianę tokenu), przy 1. podtrzymaniu 15:05 (po ~22 min) strona główna pokazała „Zaloguj się”, potem banners 401 i BRAK ciastka `access_token_web` = Vinted naprawdę usunął sesję (nie błąd sprawdzania); przyczyna nieznana. Diagnostyka: przy każdym `goto` nasłuch odpowiedzi z token/refresh/session/oauth/auth/login/logout/captcha/datadome/challenge oraz 401/403/429 (bez statycznych) → przy porażce log + dopisane do `last_reason`; `cookie_report()` (BEZ wartości) = czas życia ciastek `access_token_web` (+ JWT exp) i `refresh_token_web` + lista nazw ciastek – logowany po każdym udanym podtrzymaniu i przy porażce. **Log 2026-10-09 18:25–18:46 (nowa diagnostyka)**: po restarcie 18:25 profil miał tylko tokeny z JWT exp 24 h (prawdopodobnie GOŚCIA – sesja z 18:05 nie przetrwała), passive 18:25:39 „Sesja aktywna (banner bez nazwy)” = prawdopodobnie fałszywie pozytywne; 18:44:04 przy wejściu na stronę WSZYSTKIE ciastka sesji Vinted zniknęły (access/refresh_token_web, _vinted_fr_session, v_sid, anon_id) – wylogowanie po stronie serwera; żadnego zapytania o odświeżenie tokenu, jedyny ruch: Cloudflare `cdn-cgi/challenge-platform/.../jsd/oneshot` (JS Detections). Hipoteza (NIEPOTWIERDZONA): Vinted kończy sesję przeglądarki rozpoznanej jako zautomatyzowana (por. blokada z rana 2026-10-09). Diagnostyka: `describe_jwt()` w `cookie_report` (czas życia exp-iat, iss, scope, czy sub jest liczbą – bez wartości) do odróżnienia tokenu konta od gościa; `SCRAPER_KEEPALIVE_NAVIGATE=false` = podtrzymanie bez `goto` (test, czy wejście na stronę wylogowuje). **Log 2026-10-09 19:02–19:04**: po każdym restarcie w profilu tylko token GOŚCIA (`describe_jwt`: scope=public, aud=fr.core.api.vinted.com, bez `sub`, 24 h); użytkownik zalogował się ~19:03 – UI pokazał awatar, ale ~sekundy później `access_token_web` zniknął (banners 401), F5 = wylogowany. Vinted kończy sesję bota coraz szybciej (20 min → od razu). Zalecenie dla użytkownika: `SNIPER_BUY_ENABLED=false`, kupować ręcznie z powiadomień; NIE obchodzić dalej wykrywania. `is_guest_token()` – token gościa nie liczy się jako sesja (fałszywe „Sesja aktywna” z 18:25). **19:17 (test użytkownika)**: zalogowanie w oknie bota, UI zalogowany, F5 → wylogowany; stara wersja (bez `is_guest_token`) uznała token gościa za „Sesja aktywna” i do następnego podtrzymania pokazywała AKTYWNY. Dodane `AutoBuyer._wait_watching()`: między podtrzymaniami co `SCRAPER_SESSION_WATCH_S` (60–120 s) `refresh_and_check(navigate=False, reload_on_token_change=False)`, brak sesji → od razu pełne `check_session()`. Test rozstrzygający (do zrobienia u użytkownika): ten sam profil w zwykłym Chrome BEZ programu (`chrome.exe --user-data-dir=...profiles\scraper`), logowanie + F5. **Noc 2026-10-10/11 (komputer użytkownika, ~8 h)**: sesja przetrwała całą noc – 69 udanych podtrzymań, 0 porażek; token konta: scope=user, `sub` = liczba, czas życia 60 min; JS Vinted wymienia go dopiero przy <~5 min do końca (przy zapasie 8–12 min bot wchodził na stronę co minutę przez ~5 min) → `SCRAPER_REFRESH_AHEAD_MIN` domyślnie 2–4; szybkie sprawdzenia logują „Zalogowany jako” + ciastka tylko przy zmianie stanu (`_passive_success`, było 352 linie/noc). **Logi 2026-10-10…12 (komputer główny)**: sesja żyła ~20 h (21:43 → 12.10 17:22) mimo restartów. 11.10 20:39 fałszywe „padła” = zerwany internet (`net::ERR_CONNECTION_RESET` ×3, okno zostało na `chrome-error://`) → teraz `is_network_error()`/`is_error_page()`: gdy WSZYSTKIE próby `verify_session` padną na sieci → `network_down=True`, zdarzenie `brak_sieci` w dzienniku, BEZ wstrzymania auto-zakupu i maila, ponowienie za 30–60 s; `_passive_check` ze strony błędu Chrome wraca na stronę główną. 12.10 17:22 PRAWDZIWE wylogowanie: wejście przy ~4 min do exp → `/session-refresh` nie skończyło się w 45 s → potem tylko token gościa (Vinted odrzucił odświeżenie; przyczyna NIEZNANA). U użytkownika `.env` miał jeszcze `SCRAPER_REFRESH_AHEAD_MIN=8-12` (wejścia co minutę 12→5 min) → `next_keepalive_delay` w oknie przed exp robi jedno wejście ~1,5–2 min przed wygaśnięciem; `/session-refresh` czekamy 90 s, przy utknięciu log tytułu/tekstu strony + `logs/session_refresh_stuck.png`. |
+| `KLIKANIE.md` | Instrukcja (dla nowego czatu): jak robić automatyczne klikanie w Vinted na podstawie outerHTML - stabilne selektory, czekanie na hydrację, ponawianie kliku. |
+| `tests/` | 173 testy (pytest; `test_evaluator.py` z atrapami API Gemini i Anthropic), `fixtures.json` = prawdziwe odpowiedzi API. |
+
+## Ustalenia o API Vinted (zweryfikowane na żywo przez użytkownika)
+
+* **Katalog**: `GET https://api.vinted.pl/svc-catalogue/items` (stary `www.vinted.pl/api/v2/catalog/items` = 404).
+  Parametry jak w przeglądarce: `page, per_page, search_text, price_from, currency=PLN, order=newest_first,
+  attribute_ids[catalog], attribute_ids[brand], attribute_ids[brand_collection], attribute_ids[status]`
+  (+ `price_to`, jeśli ustawione – niezweryfikowane). **Puste `price_from=` → 400 INVALID_REQUEST** – wysyłamy
+  ceny tylko z wartością. `per_page` jest respektowane (96 → ~39 KB, 20 → ~9 KB, 4 → ~3 KB odpowiedzi).
+* **Nagłówki katalogu** (z cURL przeglądarki): Edge 154 UA + `sec-ch-ua`, `origin: https://www.vinted.pl`,
+  `sec-fetch-site: same-site`, `priority: u=1, i`, `referer: https://www.vinted.pl/`, `platform: web`,
+  `x-next-app: marketplace-web`, plus `x-csrf-token` i `x-anon-id` z Playwrighta.
+* **Szczegóły oferty** (nadal stare API, same-origin): `GET www.vinted.pl/api/v2/items/{id}/details/sidebar`
+  (plugin `item_status.item_closing_action`: `"sold"` = sprzedana, `null` = aktywna; `description`,
+  `user_info_header` ze sprzedawcą) i `/api/v2/items/{id}/shipping_details`.
+* **ID ofert**: nadawane przy tworzeniu, nie publikacji – w „najnowszych” pojawiają się oferty z niższym ID
+  (szkice, podbicia). Dlatego deduplikacja jest bez progu „niższe ID = stare”.
+* Ciastka `cf_clearance` / `datadome` są wiązane z UA → Playwright i httpx mają ten sam UA.
+* **Auto-zakup** (test na żywo 2026-10-03, „origami” za 3,95 zł – zakończony „Sprzedane”): „Kup teraz” →
+  `www.vinted.pl/checkout?purchase_id=…&order_id=…&order_type=transaction` (dane: `GET /api/v2/purchases/{id}/checkout`)
+  → klik „Zapłać” (`[data-testid="single-checkout-order-summary-purchase-button"]`) → **`POST /api/v2/purchases/{id}/checkout/payment`**
+  = płatność ruszyła; przy zapisanej karcie nie było captchy ani 3DS. W tym teście punkt odbioru był już wybrany –
+  ścieżka „Wybierz punkt odbioru” → „Potwierdź” jest sprawdzona tylko na atrapie.
+
+## Proxy i transfer
+
+* Proxy IPRoyal (rotacyjne, każde połączenie = nowe IP) **tylko dla kodu w `sniper/`**. Stare skrypty
+  użytkownika (poza tym repo) działają z domowego IP – nie dodawać im proxy.
+* Bez proxy Zwiadowca nie startuje (`SNIPER_REQUIRE_PROXY=true`).
+* 407 od IPRoyal = złe hasło albo brak transferu na koncie (Chromium pokazuje wtedy mylące
+  `ERR_PROXY_AUTH_UNSUPPORTED`). `WinError 10054` = węzeł proxy zerwał połączenie (szum, ponawiamy).
+* Pomiary (4 oferty/skan co 5 s): skan ≈ 5,9 KB (z czego ~2,9 KB to wysyłane nagłówki z ciastkami),
+  ≈ 4,4 MB/h; szczegóły jednej oferty ≈ 15 KB; **pełna wizyta przeglądarki ≈ 9,3 MB** – dlatego tryb
+  lekki (`SNIPER_BROWSER_LIGHT`) i ponowne użycie sesji po restarcie (`SNIPER_SESSION_MAX_AGE`).
+  Wyższe `SNIPER_PRICE_FROM` = mniej ofert = mniej zapytań o szczegóły.
+
+## Wiele kategorii (D5, 2026-10-25 – z analizatora `PodolskiSzymon/analyse_data`)
+
+* Sniper działa teraz na **serwerze** użytkownika (obok analizatora), sterowany pilotem ntfy z `analyse_data`.
+* `SNIPER_CATALOGS=auto` → katalogi + zakresy cen z `sniper/guides/catalogs.json` (generuje `python -m analyzer
+  sniper-guide`, automat 2× w tygodniu kopiuje do `ANALYZER_SNIPER_GUIDES_DIR`); bez pliku – zakresy z analizy
+  2026-10-25 (`categories.ANALYSIS_CATALOGS`). Katalogi skanowane po kolei (`categories.schedule`, laptopy waga 3) –
+  transfer proxy jak przy jednym katalogu. Mieszane 3582/3583/3584: kategoria z tytułu (karta / RAM / dysk), reszta
+  pomijana przed pobraniem szczegółów. `Offer.category` wybiera wytyczne.
+* `sniper/guides.py`: `guides/<kategoria>.md` (tabela analizatora: grupa … sprzedam za ~ … max zakup …), laptop bez
+  pliku i `category=None` → `guidelines.md`; „karta rynku” (wiersze dopasowane po tytule, warianty Pro/Max/Ti
+  blokują dopasowanie) idzie w zapytaniu; bramka ceny `SNIPER_AI_PRICE_GATE` (1,25) odcina oferty za drogie wg
+  tabeli przed AI. Kategoria bez pliku → pominięta przed AI.
+* Reguła zysku użytkownika (w wytycznych): koszty 46 zł (Podbicie 26 + wysyłka 20), marża ≥ 40% → min. 300 zł,
+  35% → 500, 30% → 700, 25% → 900, 20% → 1 100 (+40 zł/pkt), < 20% nie kupujemy. Schemat AI: dodatkowo
+  `margin_pct`, `sell_days_estimate`, `meets_profit_rule`.
+* Filtry słów: ogólne `SNIPER_AI_KEYWORDS` / `_EXCLUDE_KEYWORDS` / `SNIPER_AI_PRICE_MIN/MAX` tylko dla laptopów;
+  per kategoria `SNIPER_AI_KEYWORDS_<KAT>`, `SNIPER_AI_EXCLUDE_KEYWORDS_<KAT>`.
+* Gałąź z D5: `claude/hopeful-faraday-n33quh` (od `claude/epic-darwin-evl0s1`).
+
+## Najważniejsze zmienne `.env`
+
+`SNIPER_PROXY_HOST`, `SNIPER_PROXY_AUTH`, `SNIPER_CATALOGS` (auto / lista), `SNIPER_GUIDES_DIR`, `SNIPER_CATALOG` (np. 3580 = laptopy), `SNIPER_PRICE_FROM`,
+`SNIPER_PRICE_TO`, `SNIPER_PER_PAGE`, `SNIPER_POLL_INTERVAL`, `SNIPER_SMTP_USER`, `SNIPER_SMTP_PASSWORD`,
+`SNIPER_EMAIL_TO`, `SNIPER_REFRESH_*`, `SNIPER_BROWSER_LIGHT`, `SNIPER_SESSION_MAX_AGE`, `SNIPER_HEARTBEAT`,
+`SNIPER_AI_*` (klucz, model, effort, próg `SNIPER_AI_MIN_SCORE`, `SNIPER_AI_NOTIFY_ALL`, filtr wstępny, limity), `SNIPER_BUY_*`, `SNIPER_MAIL_ONLY_PURCHASES` (true = maile tylko z auto-zakupu; działa tylko gdy auto-zakup wystartował), `SNIPER_AI_REPORT_ABOVE` (próg dla `oceny.html`), `SNIPER_MIRROR_DIR` / `SNIPER_MIRROR_INTERVAL_MIN` (kopia logów do chmury), `SNIPER_NTFY_*` (push na telefon), `SCRAPER_PROFILE_DIR`, `SCRAPER_LOGIN_URL`, `SCRAPER_*` (losowe przerwy przeglądarki konta, zakresy „od-do”).
+Pełna lista: `sniper/.env.example`. `.env` i `sniper/logs/` (logi, `session.json` z tokenami, `evaluations.*`) są w `.gitignore`.
+
+## Ocena AI (zrobione, do weryfikacji u użytkownika)
+
+* Dostawca `SNIPER_AI_PROVIDER=gemini` (model `gemini-3.8-flash`) albo `anthropic` (`claude-opus-5-5`);
+  klucz w `SNIPER_AI_API_KEY` (lub `GEMINI_API_KEY` / `ANTHROPIC_API_KEY`) – tylko w `.env` użytkownika, nigdy w repo.
+  Zdjęcia jako URL-e (`photo_urls`, max `SNIPER_AI_MAX_PHOTOS`) – pobiera je dostawca AI; Gemini ma znane
+  problemy z URL-ami (429) → wtedy `SNIPER_AI_PHOTOS=download` (pobieranie z domowego IP, bez proxy).
+* Wywołanie API idzie bezpośrednio z komputera (nie przez proxy) – nie kosztuje transferu IPRoyal.
+* Do sprawdzenia u użytkownika: czy Gemini pobiera obrazy `images1.vinted.net` (model zwraca `photos_seen` i `photo_notes`; log `[AI] … zdjęcia: wysłane N, AI widzi M`; przy 400 ocena idzie bez zdjęć –
+  widać to w `photos_sent: 0` w `evaluations.jsonl`), trafność ocen na historii (`python -m sniper.evaluator --last 20`).
+
+## Pomysły na oszczędności transferu
+
+* Pomysł użytkownika: pobierać szczegóły oferty z domowego IP zamiast przez proxy. Uwaga: ciastka
+  anty-botowe zdobyte przez proxy mogą nie działać z innego IP → potrzebna osobna „domowa” sesja
+  (osobna wizyta Playwrighta bez proxy). Szczegóły to ~15 KB/ofertę, więc oszczędność jest mała w porównaniu
+  ze skanowaniem i wizytami przeglądarki.
+* Inne możliwe oszczędności: wysyłać do `api.vinted.pl` tylko niezbędne ciastka (połowa każdego skanu
+  to upload nagłówków), rzadsze skanowanie, wyższy `SNIPER_PRICE_FROM`.
+
+## Preferencje użytkownika
+
+* Odpowiedzi i komentarze w kodzie po polsku; konkretnie, z wynikami testów.
+* Zmiany parametrów zapytań do Vinted tylko na podstawie realnego ruchu przeglądarki (cURL z F12) albo
+  testu u użytkownika – bez zgadywania endpointów.
+* Nie commitować sekretów (hasła, ciastka, tokeny, `.env`).

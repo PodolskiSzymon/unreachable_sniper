@@ -22,6 +22,6 @@ Kontrola wykrywalności tej przeglądarki: `python -m sniper.check_detection` (b
 otwarte do oceny).
 
 * Dokumentacja modułu: [`sniper/README.md`](sniper/README.md)
-* Kontekst projektu, ustalenia o API Vinted i plan dalszych prac: [`CLAUDE.md`](CLAUDE.md)
-  (ten sam tekst co `sniper/CONTEXT.md`; Claude Code wczytuje go automatycznie)
+* Kontekst dla Claude: [`CLAUDE.md`](CLAUDE.md) (krótki, wczytywany automatycznie); aktualny stan projektu:
+  `PodolskiSzymon/analyse_data` → `STAN_PROJEKTU.md`; historia Snipera: [`sniper/HISTORIA_SNIPERA.md`](sniper/HISTORIA_SNIPERA.md)
 * Testy: `pip install pytest && python -m pytest sniper/tests`
