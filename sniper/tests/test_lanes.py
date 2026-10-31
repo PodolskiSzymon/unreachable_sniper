@@ -32,12 +32,12 @@ def test_extra_proxy_from_env(monkeypatch, caplog):
     monkeypatch.setenv("SNIPER_PROXY_2_KATEGORIE", "telefony, Console")
     monkeypatch.setenv("SNIPER_PROXY_2_POLL", "3")
     monkeypatch.setenv("SNIPER_PROXY_3_URL", "http://u:p@p.webshare.io:80")
-    monkeypatch.setenv("SNIPER_PROXY_3_KATEGORIE", "3582")
+    monkeypatch.setenv("SNIPER_PROXY_3_KATEGORIE", "3602")
     monkeypatch.setenv("SNIPER_PROXY_4_HOST", "zapas:1")                # adres bez kategorii - nieużywane
     monkeypatch.setenv("SNIPER_PROXY_HOST", "geo.iproyal.com:12321")
     monkeypatch.setenv("SNIPER_PROXY_AUTH", "LOGIN:HASLO_country-pl")
     with caplog.at_level(logging.WARNING):
-        assert proxy_routes_from_env() == {"phone": "2", "console": "2", "3582": "3"}
+        assert proxy_routes_from_env() == {"phone": "2", "console": "2", "3602": "3"}
     assert "SNIPER_PROXY_4_KATEGORIE" in caplog.text
     assert extra_proxy_url("2") == "http://login__cr.pl:has%40lo@gw.dataimpulse.com:823"
     assert extra_proxy_url("3") == "http://u:p@p.webshare.io:80"
@@ -208,7 +208,7 @@ def test_burst_in_one_catalog_speeds_up_only_that_catalog(monkeypatch):
         return [{"name": "anon_id", "value": "a", "domain": ".vinted.pl", "path": "/"}], {"x-csrf-token": "t"}
 
     monkeypatch.setattr(sess, "fetch_fresh_tokens", fake_tokens)
-    scans = {"3661": 0, "3584": 0}
+    scans = {"3661": 0, "3603": 0}
 
     def handler(request):
         catalog = request.url.params["attribute_ids[catalog]"]
@@ -219,7 +219,7 @@ def test_burst_in_one_catalog_speeds_up_only_that_catalog(monkeypatch):
 
     async def scenario():
         session = _session(handler)
-        cfg = ScoutConfig(category="3580", catalogs="3661:300-3600, 3584:300-2700", price_floor=0, log_dir="",
+        cfg = ScoutConfig(category="3580", catalogs="3661:300-3600, 3603:300-2700", price_floor=0, log_dir="",
                           per_page=2, poll_interval=0.2, poll_min=0.02, poll_step=0.19, poll_jitter=0.0,
                           fast_minutes=10.0, heartbeat_interval=0, session_max_age_min=0)
         scout = Scout(cfg, session, EmailNotifier(SmtpConfig()))
@@ -236,4 +236,4 @@ def test_burst_in_one_catalog_speeds_up_only_that_catalog(monkeypatch):
 
     scout = asyncio.run(scenario())
     assert [b["spec"].catalog_id for b in scout.lanes["glowne"].fast.values()] == [3661]
-    assert scans["3661"] >= 4 * scans["3584"] and scans["3584"] <= 5     # RAM co ~0,4 s (2 katalogi × 0,2 s)
+    assert scans["3661"] >= 4 * scans["3603"] and scans["3603"] <= 5     # RAM co ~0,4 s (2 katalogi × 0,2 s)

@@ -45,6 +45,11 @@ VARIANTS = {
     "lite_mediany": ({"model": LITE_MODEL, "tryb": "mediany"}, f"{LITE_MODEL} + mediany"),
     "mediany_srednia": ({"tryb": "mediany", "media_resolution": "medium"}, "mediany + średnia rozdzielczość"),
     "kaskada": ({"tryb": "kaskada"}, f"etap 1 {LITE_MODEL} bez zdjęć, pełna ocena tylko gdy ≥ {KASKADA_PROG:g}/10"),
+    # 31.10 (koszty): obecny = wiersze rodziny + ocena dwuetapowa + bez AI przy braku danych (domyślne ustawienia)
+    "jeden_etap": ({"two_stage": False}, "jedna pełna ocena zamiast szybkiej + pełnej dla obiecujących"),
+    "cala_tabela": ({"guide_rows": "wszystkie"}, "cała tabela kategorii (najwyżej 80 wierszy) zamiast wierszy rodziny"),
+    "przed_31_10": ({"two_stage": False, "guide_rows": "wszystkie", "skip_no_data": False},
+                    "jak przed 31.10: jedna pełna ocena, cała tabela, AI także bez danych rynku"),
 }
 # Dzień testowy 28.10 (użytkownik): tryby mediany / model / basal × Gemini 3.8 Flash / 2.5 Flash Lite × 3 / 6 zdjęć,
 # myślenie medium → 12 wariantów na tych samych ofertach.
@@ -70,7 +75,8 @@ for _name, _over, _text in (
     VARIANTS[_name] = ({"tryb": "mediany", "model": "gemini-3.8-flash", "max_photos": 6, "effort": "medium",
                         **_over}, f"mediany, 6 zdjęć: {_text}")
 SETS = {"dzien_testowy": ",".join(f"{m}_{k}_z{p}" for m in TEST_MODES for k in TEST_MODELS for p in (3, 6)),
-        "dzien_testowy2": "d2_38,d2_38_mysl_low,d2_38_krotkie,d2_35l,d2_35l_krotkie,d2_31l"}
+        "dzien_testowy2": "d2_38,d2_38_mysl_low,d2_38_krotkie,d2_35l,d2_35l_krotkie,d2_31l",
+        "koszty": "przed_31_10,obecny,jeden_etap,cala_tabela"}
 DEFAULT_VARIANTS = "obecny,mediany,zdjecia3,srednia_rozdz,niska_rozdz,mysl_niska,lite_mediany,kaskada"
 GOLDEN_FILE = Path(__file__).with_name("bench_golden.json")
 
@@ -86,7 +92,15 @@ def parse_custom(text):
     for part in (p.strip() for p in spec.split(",") if p.strip()):
         key, _, value = part.partition("=")
         key, value = key.strip(), value.strip()
-        out[key] = int(value) if value.isdigit() else value
+        if value.lower() in ("true", "tak", "false", "nie"):
+            out[key] = value.lower() in ("true", "tak")
+        elif value.isdigit():
+            out[key] = int(value)
+        else:
+            try:
+                out[key] = float(value)
+            except ValueError:
+                out[key] = value
     return name.strip(), out
 
 

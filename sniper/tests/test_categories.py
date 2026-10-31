@@ -62,19 +62,21 @@ def phone(**kw):
 def test_category_for_catalogs():
     assert category_for(3580, "Legion RTX 4060") == "laptop"
     assert category_for("3661", "iPhone") == "phone"
-    assert category_for(3582, "Karta graficzna RTX 3060 12GB") == "gpu"
-    assert category_for(3582, "Pamięć RAM DDR4 16GB") == "ram"
-    assert category_for(3583, "Dysk SSD NVMe 1TB") == "storage"
-    assert category_for(3582, "Wentylator 120mm RGB") == "skip"
+    # 31.10: podzespoły z własnych katalogów (lista użytkownika), ogólne 3582 / 3583 / 3584 wycofane
+    assert category_for(3602, "Karta graficzna RTX 3060 12GB") == "gpu"
+    assert category_for(3603, "Pamięć RAM DDR4 16GB") == "ram"
+    assert category_for(3607, "Dysk SSD NVMe 1TB") == "storage"
+    assert [category_for(c) for c in (3599, 3600, 3601)] == ["cpu", "motherboard", "bundle"]
+    assert category_for(3582, "Karta graficzna RTX 3060 12GB") == "skip"
     assert category_for(3584, "Kabel HDMI") == "skip"
     assert category_for(3063, "karta microSD") is None          # dawny tryb jednego katalogu
     assert category_for("karty_pamieci", "x") is None
 
 
 def test_parse_catalogs_and_weights():
-    specs = parse_catalogs("3580:250-6100*3, 3661:100-3600, 3582, zle", "100", "900")
+    specs = parse_catalogs("3580:250-6100*3, 3661:100-3600, 3602, zle", "100", "900")
     assert [(s.catalog_id, s.price_from, s.price_to, s.share) for s in specs] == [
-        (3580, "250", "6100", 3), (3661, "100", "3600", 1), (3582, "100", "900", 1)]
+        (3580, "250", "6100", 3), (3661, "100", "3600", 1), (3602, "100", "900", 1)]
     analysis = parse_catalogs(ANALYSIS_CATALOGS)
     assert len(analysis) == 7 and analysis[0].share == 3      # laptopy domyślnie ×3
     order = [s.catalog_id for s in schedule(analysis)]
@@ -90,6 +92,14 @@ def test_catalog_source_modes(tmp_path):
 
     auto = CatalogSource("auto", tmp_path, single)
     assert len(auto.get()) == 7                        # brak catalogs.json → zakresy z analizy
+    assert not {3582, 3583, 3584} & {s.catalog_id for s in auto.get()}
+    # stary catalogs.json / ręczna lista z wycofanymi katalogami ogólnymi → pomijane
+    assert [s.catalog_id for s in CatalogSource("3580, 3582, 3584:150-900", tmp_path, single).get()] == [3580]
+    old = tmp_path / "stary"
+    old.mkdir()
+    (old / "catalogs.json").write_text(json.dumps({"catalogs": [{"catalog_id": c, "price_from": 300, "price_to": 900}
+                                                                 for c in (3580, 3582, 3583, 3602)]}), encoding="utf-8")
+    assert [s.catalog_id for s in CatalogSource("auto", old, single).get()] == [3580, 3602]
     path = tmp_path / "catalogs.json"
     path.write_text(json.dumps({"catalogs": [{"catalog_id": 3580, "price_from": 300, "price_to": 5000.0,
                                               "weight": 2}]}), encoding="utf-8")
@@ -162,11 +172,30 @@ def test_category_filters(tmp_path):
     assert prefilter(laptop(category="laptop", title="Dell"), cfg) == "brak słów kluczowych"
 
 
+def test_phone_offer_family_rows_instead_of_whole_table(tmp_path):
+    """31.10 (SNIPER_AI_GUIDE_ROWS=rodzina, domyślnie): w instrukcji systemowej tylko legenda tabeli (stała dla
+    kategorii), w wiadomości wiersze TEJ oferty - pasujący (✓) i inne warianty modelu; inne modele pominięte."""
+    guides(tmp_path)
+    client = FakeClient(response({**EVAL_DEAL, "gpu_model": None, "laptop_model": "iPhone 13 128 GB"}))
+    evaluator = OfferEvaluator(ai_cfg(tmp_path, guide_rows="rodzina"), FakeNotifier(), log_dir=tmp_path, client=client)
+    record = run(evaluator.evaluate(phone()))
+    assert record["status"] == STATUS_EVALUATED and record["evaluation"]["table_rows"] == 2
+    system = client.calls[0]["system"][0]["text"]
+    assert "kategoria: telefony" in system and "Tabela cen" in system and "iPhone 13" not in system
+    assert "RTX 4060" not in system                                  # ręczne wytyczne laptopów nie idą do telefonów
+    task = client.calls[0]["messages"][0]["content"][-1]["text"]
+    rows = task.split("<wiersze_tabeli>")[1].split("</wiersze_tabeli>")[0]
+    assert "| ✓ iPhone 13 128 GB |" in rows and "| iPhone 13 Pro 128 GB |" in rows and "Galaxy" not in rows
+    assert "PL / zagr." not in rows and "max zakup" in rows          # zwięzła tabela
+    assert "<karta_rynku>" not in task
+
+
 def test_phone_offer_uses_phone_guide_and_market_card(tmp_path):
     guides(tmp_path)
     client = FakeClient(response({**EVAL_DEAL, "gpu_model": None, "laptop_model": "iPhone 13 128 GB",
                                   "margin_pct": 38, "sell_days_estimate": 4, "meets_profit_rule": True}))
-    evaluator = OfferEvaluator(ai_cfg(tmp_path), FakeNotifier(), log_dir=tmp_path, client=client)
+    evaluator = OfferEvaluator(ai_cfg(tmp_path, guide_rows="wszystkie"), FakeNotifier(), log_dir=tmp_path,
+                               client=client)
     record = run(evaluator.evaluate(phone()))
     assert record["status"] == STATUS_EVALUATED
     ev = record["evaluation"]
@@ -216,11 +245,11 @@ def test_push_shows_category_margin_days():
 
 
 # ----------------------------------------------------------------------------- zwiadowca: wiele katalogów
-def test_scout_rotates_catalogs_and_skips_other_parts():
+def test_scout_rotates_catalogs_and_skips_retired_ones():
     requests = []
     pages = {"3580": [{"id": 1, "title": "Legion RTX 4060"}],
-             "3582": [{"id": 10, "title": "Wentylator 120mm"}, {"id": 11, "title": "RTX 3060 12GB"}]}
-    polls = {"3580": 0, "3582": 0}
+             "3607": [{"id": 10, "title": "Dysk HDD 500GB"}, {"id": 11, "title": "SSD 1TB"}]}
+    polls = {"3580": 0, "3607": 0}
 
     def handler(request):
         catalog = request.url.params["attribute_ids[catalog]"]
@@ -228,14 +257,15 @@ def test_scout_rotates_catalogs_and_skips_other_parts():
         polls[catalog] += 1
         items = list(pages[catalog])
         if polls[catalog] == 2:
-            items += ([{"id": 20, "title": "Kabel zasilający"}, {"id": 21, "title": "Dysk SSD NVMe 1TB"}]
-                      if catalog == "3582" else [{"id": 2, "title": "MSI RTX 4070"}])
+            items += ([{"id": 21, "title": "Dysk SSD NVMe 1TB"}] if catalog == "3607"
+                      else [{"id": 2, "title": "MSI RTX 4070"}])
         return httpx.Response(200, json={"items": [{**it, "user": {}} for it in items]})
 
     async def scenario():
         session = VintedSession()
         session.client = httpx.AsyncClient(transport=httpx.MockTransport(handler), headers=session.client.headers)
-        cfg = ScoutConfig(category="3580", catalogs="3580:250-6100*1, 3582:150-2700", price_floor=0)
+        # 3582 (dawny ogólny katalog części) w ręcznej liście - pomijany, nigdy nie pytamy o niego Vinted
+        cfg = ScoutConfig(category="3580", catalogs="3580:250-6100*1, 3582:150-2700, 3607:300-1400", price_floor=0)
         scout = Scout(cfg, session, EmailNotifier(SmtpConfig()))
         inspected = []
 
@@ -243,16 +273,16 @@ def test_scout_rotates_catalogs_and_skips_other_parts():
             inspected.append((item["id"], spec.catalog_id, category))
         scout.inspect = fake_inspect
         for _ in range(4):
-            await scout.poll_catalog()           # 3580 rozgrzewka, 3582 rozgrzewka, 3580, 3582
+            await scout.poll_catalog()           # 3580 rozgrzewka, 3607 rozgrzewka, 3580, 3607
         await asyncio.gather(*scout._tasks)
         await session.close()
         return scout, inspected
 
     scout, inspected = asyncio.run(scenario())
-    assert requests == [("3580", "250", "6100"), ("3582", "150", "2700")] * 2
-    assert inspected == [(2, 3580, "laptop"), (21, 3582, "storage")]      # kabel pominięty bez detali
-    assert scout._skipped == {"inna kategoria": 1}
-    assert {k.split()[0]: v for k, v in scout._per_catalog.items()} == {"3580": [2, 1, 1, 0], "3582": [2, 2, 1, 0]}   # rozgrzewka nie liczy nowych
+    assert requests == [("3580", "250", "6100"), ("3607", "300", "1400")] * 2
+    assert inspected == [(2, 3580, "laptop"), (21, 3607, "storage")]
+    assert not scout._skipped
+    assert {k.split()[0]: v for k, v in scout._per_catalog.items()} == {"3580": [2, 1, 1, 0], "3607": [2, 1, 1, 0]}   # rozgrzewka nie liczy nowych
     assert scout.seen.maxlen >= 200                         # pamięć ID na 2 katalogi
 
 
@@ -295,6 +325,8 @@ def test_test_kits_in_push():
     assert "DDR5 SO-DIMM" in test_kit("ram", "DDR5 SODIMM 32GB do laptopa")
     assert "stanowisko B" in test_kit("ram", "Kingston Fury DDR5 32GB")
     assert "NVMe" in test_kit("storage", "Samsung 980 Pro NVMe 1TB") and "SATA" in test_kit("storage", "SSD 2TB")
+    assert "AM4: stanowisko A" in test_kit("cpu", "Ryzen 5 5600X") and "POST" in test_kit("motherboard", "MSI B550")
+    assert "zasilacz" in test_kit("bundle", "i5-9600KF + Z390")
     assert test_kit(None) is None
     msg = build_deal_message({"title": "RTX 4080 Gigabyte", "total_price": 2500, "category": "gpu"},
                              {"score": 8, "max_buy_price_pln": 2700, "potential_profit_pln": 900,
@@ -321,19 +353,19 @@ def test_missing_equipment_warning(monkeypatch):
 def test_enabled_categories():
     from sniper.categories import wanted_specs
     specs = parse_catalogs(ANALYSIS_CATALOGS)
-    assert [s.catalog_id for s in wanted_specs(specs, ("laptop", "ram"))] == [3580, 3582, 3584]
+    assert [s.catalog_id for s in wanted_specs(specs, ("laptop", "ram"))] == [3580, 3603]
     assert len(wanted_specs(specs, ())) == 7
     assert wanted_specs([CatalogSpec("3063")], ("phone",))[0].catalog_id == "3063"   # tryb jednego katalogu
     assert category_for(3661, "iPhone", ("laptop",)) == "skip"
-    assert category_for(3582, "RTX 3060 + RAM DDR4 16GB", ("ram",)) == "ram"         # karta wyłączona → RAM
-    assert category_for(3582, "RTX 3060 12GB", ("ram", "storage")) == "skip"
+    assert category_for(3603, "RAM DDR4 16GB", ("ram",)) == "ram"
+    assert category_for(3602, "RTX 3060 12GB", ("ram", "storage")) == "skip"
 
 
 def test_scout_skips_disabled_catalogs():
-    cfg = ScoutConfig(category="3580", catalogs="3580:250-6100*1,3661:100-3600,3582:150-2700",
+    cfg = ScoutConfig(category="3580", catalogs="3580:250-6100*1,3661:100-3600,3602:150-2700",
                       categories=("phone", "gpu"))
     scout = Scout(cfg, VintedSession(), EmailNotifier(SmtpConfig()))
-    assert sorted({scout.next_spec().catalog_id for _ in range(4)}) == [3582, 3661]
+    assert sorted({scout.next_spec().catalog_id for _ in range(4)}) == [3602, 3661]
 
 
 def test_handheld_console_kit_and_mail_rows():
@@ -365,10 +397,10 @@ def test_purchase_cost_includes_buyer_fee(tmp_path):
 
 def test_catalog_weights_override():
     from sniper.categories import apply_weights, parse_weights
-    assert parse_weights("laptop:3, phone:3, 3582:2, zle") == {"laptop": 3, "phone": 3, "3582": 2}
+    assert parse_weights("laptop:3, phone:3, 3602:2, zle") == {"laptop": 3, "phone": 3, "3602": 2}
     specs = apply_weights(parse_catalogs(ANALYSIS_CATALOGS), parse_weights("laptop:3,phone:3,ram:2"))
     shares = {s.catalog_id: s.share for s in specs}
-    assert shares[3580] == 3 and shares[3661] == 3 and shares[3728] == 1 and shares[3582] == 2
+    assert shares[3580] == 3 and shares[3661] == 3 and shares[3728] == 1 and shares[3603] == 2
     cfg = ScoutConfig(category="3580", catalogs="3580:250-6100,3661:100-3600,3728:100-3200",
                       categories=(), catalog_weights="laptop:3,phone:3")
     scout = Scout(cfg, VintedSession(), EmailNotifier(SmtpConfig()))
@@ -614,11 +646,11 @@ def test_very_cheap_deal_gets_warning(tmp_path):
 
 def test_price_floor_raises_cheap_catalogs():
     from sniper.categories import apply_floor
-    specs = parse_catalogs("3580:200-7400*3, 3661:100-5400, 3728:500-3500, 3584:20-100, 3025")
+    specs = parse_catalogs("3580:200-7400*3, 3661:100-5400, 3728:500-3500, 3603:20-100, 3025")
     out = apply_floor(specs, 300)
     assert [(s.catalog_id, s.price_from, s.price_to, s.weight) for s in out] == [
         (3580, "300", "7400", 3), (3661, "300", "5400", 0), (3728, "500", "3500", 0),
-        (3584, "20", "100", 0),                       # świadomie tani zakres (do < progu) - bez zmian
+        (3603, "20", "100", 0),                       # świadomie tani zakres (do < progu) - bez zmian
         (3025, "300", "", 0)]
     assert apply_floor(specs, 0) == specs and apply_floor(specs, None) == specs
 
@@ -711,6 +743,6 @@ def test_rule_min_margin_cheap_to_expensive(tmp_path):
 
 def test_auto_catalogs_start_exactly_at_floor():
     from sniper.categories import apply_floor
-    specs = parse_catalogs("3580:400-7400*3, 3661:100-5400, 3584:20-100")
+    specs = parse_catalogs("3580:400-7400*3, 3661:100-5400, 3603:20-100")
     assert [s.price_from for s in apply_floor(specs, 300, exact=True)] == ["300", "300", "20"]
     assert [s.price_from for s in apply_floor(specs, 300)] == ["400", "300", "20"]      # lista ręczna: wyższe zostaje

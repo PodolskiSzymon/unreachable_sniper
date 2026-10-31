@@ -14,21 +14,21 @@ stara kopia, nie czytać.
   botów (auto-zakup wyłączony, `SNIPER_BUY_ENABLED=false`, bo Vinted wylogowuje konto bota).
 * Nie commitować sekretów (`.env`, klucze, hasła, tokeny, temat ntfy, `logs/`, `session.json`, profil przeglądarki).
 * Gałąź jak w `analyse_data` (stan: `claude/gifted-volta-x1764p`), commit + push, bez PR. Bez identyfikatora modelu
-  AI w commitach/kodzie. Testy: `python -m pytest sniper/tests -q` (245 + 1 pominięty).
+  AI w commitach/kodzie. Testy: `python -m pytest sniper/tests -q` (259 + 1 pominięty).
 
 ## Moduły (`sniper/`)
 
 | plik | rola |
 |---|---|
 | `__main__.py`, `scout.py` | pętle Zwiadowcy – jedna na proxy (`SNIPER_PROXY_<N>_HOST/_AUTH/_KATEGORIE`, `Lane`, osobne sesje): katalogi po kolei (wagi), nowe ID, przepełnienie strony (brak ofert poprzedniego skanu) → TEN katalog częściej o `SNIPER_POLL_STEP` s (do `SNIPER_POLL_MIN`), po `SNIPER_FAST_MINUTES` spokoju o krok wolniej, szczegóły przez to samo proxy, `emit` → evaluator; heartbeat |
-| `categories.py` | katalogi z `guides/catalogs.json`, `apply_floor` (`SNIPER_PRICE_FLOOR`), `schedule`, kategoria z tytułu, sprzęt do testu |
+| `categories.py` | katalogi z `guides/catalogs.json` (od 31.10 podzespoły z własnych katalogów 3602/3603/3607/3599/3600/3601; ogólne 3582/3583/3584 pomijane), `apply_floor` (`SNIPER_PRICE_FLOOR`), `schedule`, sprzęt do testu |
 | `session.py`, `proxy_relay.py`, `traffic.py` | httpx przez proxy, odświeżanie ciastek Playwrightem, licznik transferu |
 | `fx.py` | kursy walut (wysyłka → zł) z pliku prebid, którego używa Vinted; co `SNIPER_FX_REFRESH_H` h, bez proxy |
 | `extractor.py` | JSON → `Offer`; wysyłka w zł (`FX_TO_PLN`), kraj z waluty wysyłki |
 | `config.py` | całe `.env` (`ScoutConfig`, `AiConfig` z `SNIPER_RULE_*`, `MODEL_PRICES`) |
-| `evaluator.py` | `submit` (już widziana, słowa, bramka, limit $) → backend Gemini/Anthropic/OpenRouter (`Task`) → `enforce_profit_rule`, PL +1 → logi, raport, mail, ntfy |
+| `evaluator.py` | `submit` (`route` - wiersze rodziny i kategoria z tytułu, już widziana, słowa, bramka tabeli i podobnych wg reguły zysku, bez danych = bez AI, limit $) → ocena dwuetapowa (szybka: myślenie low + zdjęcia medium; pełna tylko dla okazji / ≥ 6) przez Gemini/Anthropic/OpenRouter (`Task`) → `enforce_profit_rule`, PL +1 → logi, raport, mail, ntfy |
 | `experiment.py` | tryby `mediany` (`MEDIANS_TASK`, `finish_medians`, `cheap_guard`) i `model` (`formula_score`); CLI eksperymentu |
-| `guides.py`, `comparables.py` | tabela wytycznych + dopasowanie po słowach; `comparables.db` (FTS5): `levels`, `lookup` (bramka „za drogo” w `evaluator.gate`) |
+| `guides.py`, `comparables.py` | tabela wytycznych + dopasowanie po słowach; `route` / `family_rows` (31.10): do AI tylko wiersze rodziny oferty (model + warianty, opis, rodzina / marka, sąsiednie kategorie), `rules_text` (stała legenda); `comparables.db` (FTS5): `levels`, `lookup` (bramka „za drogo” w `evaluator.gate`) |
 | `bench.py`, `bench_golden.json`, `basal.py` | porównanie wariantów oceny (jakość / koszt) na złotym zbiorze; tryb basal (nieprzetestowany na żywo) |
 | `report.py`, `mirror.py`, `notifier.py`, `push.py` | `oceny.html` (+ `--stats`), kopia logów na Dysk, mail, ntfy |
 | `account*.py`, `buyer.py`, `autobuy.py`, `check_detection.py` | konto i auto-zakup (wyłączone) |

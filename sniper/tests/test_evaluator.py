@@ -46,7 +46,8 @@ def ai_cfg(tmp_path, **kw):
                     notify_all=False, max_concurrent=2, timeout=5.0, retries=2, retry_delay=0.0,
                     price_min=None, price_max=9000.0, keywords=("rtx", "4060"), exclude_keywords=(),
                     keywords_in="title+description", guides_dir=str(tmp_path / "guides"), price_gate=1.25,
-                    category_keywords={}, category_exclude={}, pl_bonus=0.0, skip_seen=False)
+                    category_keywords={}, category_exclude={}, pl_bonus=0.0, skip_seen=False,
+                    two_stage=False)                 # ocena dwuetapowa - osobne testy (test_cost.py)
     return replace(base, **kw)
 
 
@@ -626,7 +627,7 @@ def test_seller_country_and_poland_rule_reach_model(tmp_path):
     # 2026-10-25: premia za Polskę łamała minimalną marżę - zostaje tylko jako wyższa ocena, bez podnoszenia progu
     assert "POLSKA (PŁYNNOŚĆ)" in guidelines and "NIE podnoś maksymalnej ceny" in guidelines
     assert "+150 zł" not in guidelines and "46 zł" in guidelines
-    assert "kraj sprzedawcy" in system_text(guidelines)
+    assert "Kraj sprzedawcy NIE zmienia progów" in system_text(guidelines)
 
 
 def test_photo_check_fields(tmp_path, caplog):

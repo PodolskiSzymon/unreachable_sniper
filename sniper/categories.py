@@ -3,13 +3,15 @@
 `SNIPER_CATALOGS` (sniper/.env):
   * `auto` - katalogi i zakresy cen z `<SNIPER_GUIDES_DIR>/catalogs.json`, który generuje analizator
     (`python -m analyzer sniper-guide` / automat co 2 dni; zmiana pliku działa bez restartu),
-  * lista `3580:250-6100*3, 3661:100-3600, 3582` - katalog[:cena_od-cena_do][*waga] (bez zakresu =
+  * lista `3580:250-6100*3, 3661:100-3600, 3602` - katalog[:cena_od-cena_do][*waga] (bez zakresu =
     SNIPER_PRICE_FROM/TO; waga = ile razy częściej skanowany niż katalog z wagą 1, domyślnie laptopy 3, reszta 1),
   * puste - jak dawniej: jeden katalog `SNIPER_CATALOG` z `SNIPER_PRICE_FROM` / `SNIPER_PRICE_TO`.
 
-Nasza kategoria (do wyboru wytycznych `guides/<kategoria>.md`): katalogi „czyste” wprost (laptop, phone, tablet,
-console); w mieszanych (podzespoły 3582, nośniki 3583, akcesoria 3584) - z tytułu: karta graficzna / RAM / dysk,
-a reszta (wentylatory, kable, pendrive'y…) jest pomijana BEZ pobierania szczegółów i bez AI.
+Nasza kategoria (do wyboru wytycznych `guides/<kategoria>.md`) wynika wprost z katalogu. 31.10 (lista
+użytkownika): podzespoły mają własne katalogi - RAM 3603, dyski wewnętrzne 3607, karty graficzne 3602, procesory
+3599, płyty główne 3600, zestawy płyta + procesor 3601 - zamiast ogólnych 3582 (części i podzespoły), 3583 (nośniki)
+i 3584 (akcesoria), w których kategorię zgadywaliśmy z tytułu. Wycofane katalogi są pomijane także wtedy, gdy są
+jeszcze w starym `catalogs.json` albo w SNIPER_CATALOGS (ostrzeżenie w logu).
 """
 import json
 import logging
@@ -19,26 +21,23 @@ from pathlib import Path
 
 log = logging.getLogger("sniper.categories")
 
-CATEGORY_OF_CATALOG = {3580: "laptop", 3661: "phone", 3728: "tablet", 3025: "console"}
-# Katalogi mieszane → jakie nasze kategorie mogą w nich być (kolejność = pierwszeństwo dopasowania tytułu).
-MIXED_CATALOGS = {3582: ("gpu", "storage", "ram"), 3583: ("storage",), 3584: ("ram", "storage", "gpu")}
-AI_ENABLED_NAMES = ("laptop", "phone", "tablet", "console", "gpu", "ram", "storage")   # SNIPER_CATEGORIES
+CATEGORY_OF_CATALOG = {3580: "laptop", 3661: "phone", 3728: "tablet", 3025: "console", 3603: "ram", 3607: "storage",
+                       3602: "gpu", 3599: "cpu", 3600: "motherboard", 3601: "bundle"}
+# Ogólne katalogi sprzed 31.10 (części i podzespoły, nośniki, akcesoria) - nie skanujemy.
+RETIRED_CATALOGS = (3582, 3583, 3584)
+AI_ENABLED_NAMES = ("laptop", "phone", "tablet", "console", "gpu", "ram", "storage", "cpu", "motherboard",
+                    "bundle")                                                          # SNIPER_CATEGORIES
 CATEGORY_NAMES = {"laptop": "laptopy", "phone": "telefony", "tablet": "tablety", "console": "konsole",
-                  "gpu": "karty graficzne", "ram": "pamięci RAM", "storage": "dyski SSD"}
+                  "gpu": "karty graficzne", "ram": "pamięci RAM", "storage": "dyski", "cpu": "procesory",
+                  "motherboard": "płyty główne", "bundle": "zestawy płyta + procesor"}
 
-# Zakresy z analizy rynku 2026-10-25 (od = 60% najniższego „max zakup” grupy z realną okazją, do = najwyższy
-# „max zakup”) - używane w `.env.example`; aktualne liczy analizator do catalogs.json.
-ANALYSIS_CATALOGS = "3580:250-6100,3661:100-3600,3728:100-3200,3025:100-4400,3582:150-2700,3583:300-1400,3584:150-2700"
+# Zapasowe zakresy, gdy brak catalogs.json (analiza rynku 2026-10-25; podzespoły z dawnych katalogów ogólnych);
+# aktualne liczy analizator do catalogs.json (procesory / płyty / zestawy tylko stamtąd - tanie części rzadko
+# spełniają regułę zysku 300 zł).
+ANALYSIS_CATALOGS = "3580:250-6100,3661:100-3600,3728:100-3200,3025:100-4400,3602:150-2700,3603:150-1400,3607:300-1400"
 # Katalogi skanowane są po kolei (jeden skan co SNIPER_POLL_INTERVAL - transfer proxy jak przy jednym katalogu);
 # laptopy (największe zyski, najszybciej znikają) domyślnie co 3. skan.
 DEFAULT_WEIGHTS = {3580: 3}
-
-_TITLE_RULES = {
-    "gpu": re.compile(r"\b(?:rtx|gtx|geforce|radeon|quadro|rx\s?\d{3,4}|arc\s?a\d{3}|karta graficzna|"
-                      r"graphics card|grafikkarte|placa video|videok[aá]rtya)\b", re.I),
-    "ram": re.compile(r"\b(?:ram|ddr[2-5]|so-?dimm|dimm|pami[eę][cć] operacyjna)\b", re.I),
-    "storage": re.compile(r"\b(?:ssd|nvme|m\.2|dysk|disk|hdd|festplatte)\b", re.I),
-}
 
 
 @dataclass(frozen=True)
@@ -59,7 +58,7 @@ class CatalogSpec:
             cid = int(self.catalog_id)
         except (TypeError, ValueError):
             return []
-        return [CATEGORY_OF_CATALOG[cid]] if cid in CATEGORY_OF_CATALOG else list(MIXED_CATALOGS.get(cid, ()))
+        return [CATEGORY_OF_CATALOG[cid]] if cid in CATEGORY_OF_CATALOG else []
 
     @property
     def label(self):
@@ -68,7 +67,7 @@ class CatalogSpec:
 
 
 def parse_weights(text):
-    """'laptop:3, phone:3, 3582:2' → {'laptop': 3, 'phone': 3, '3582': 2} (błędne wpisy pomijane)."""
+    """'laptop:3, phone:3, 3602:2' → {'laptop': 3, 'phone': 3, '3602': 2} (błędne wpisy pomijane)."""
     out = {}
     for part in (p.strip() for p in (text or "").split(",")):
         key, _, value = part.partition(":")
@@ -81,8 +80,7 @@ def parse_weights(text):
 
 
 def apply_weights(specs, weights):
-    """Wagi z SNIPER_CATALOG_WEIGHTS (kategoria albo numer katalogu) zastępują te z catalogs.json / listy.
-    Katalog mieszany dostaje najwyższą wagę spośród swoich kategorii."""
+    """Wagi z SNIPER_CATALOG_WEIGHTS (kategoria albo numer katalogu) zastępują te z catalogs.json / listy."""
     if not weights:
         return list(specs)
     out = []
@@ -120,9 +118,9 @@ def wanted_specs(specs, enabled):
     return [s for s in specs if not s.categories or set(s.categories) & set(enabled)]
 
 
-def category_for(catalog_id, title, enabled=None):
-    """Nasza kategoria oferty albo None (pomiń: w katalogu mieszanym to nie karta / RAM / dysk).
-    Katalog spoza listy (dawny tryb jednego katalogu, np. karty pamięci) → None = ogólne wytyczne."""
+def category_for(catalog_id, title=None, enabled=None):
+    """Nasza kategoria oferty, "skip" (kategoria wyłączona w SNIPER_CATEGORIES albo wycofany katalog ogólny - bez
+    szczegółów i bez AI) albo None (katalog spoza listy - dawny tryb jednego katalogu, ogólne wytyczne)."""
     try:
         catalog_id = int(catalog_id)
     except (TypeError, ValueError):
@@ -130,14 +128,21 @@ def category_for(catalog_id, title, enabled=None):
     if catalog_id in CATEGORY_OF_CATALOG:
         category = CATEGORY_OF_CATALOG[catalog_id]
         return category if not enabled or category in enabled else "skip"
-    if catalog_id in MIXED_CATALOGS:
-        for category in MIXED_CATALOGS[catalog_id]:
-            if enabled and category not in enabled:
-                continue
-            if _TITLE_RULES[category].search(title or ""):
-                return category
+    if catalog_id in RETIRED_CATALOGS:
         return "skip"
     return None
+
+
+def drop_retired(specs):
+    """Bez wycofanych katalogów ogólnych (3582 / 3583 / 3584) → (katalogi, pominięte numery)."""
+    kept, dropped = [], []
+    for spec in specs:
+        try:
+            retired = int(spec.catalog_id) in RETIRED_CATALOGS
+        except (TypeError, ValueError):
+            retired = False
+        (dropped if retired else kept).append(spec if not retired else spec.catalog_id)
+    return kept, dropped
 
 
 def _to_float(value):
@@ -155,7 +160,7 @@ def _price(value):
 
 
 def parse_catalogs(text, default_from="", default_to=""):
-    """'3580:250-6100, 3661, 3582:150-2700' → [CatalogSpec]. Błędny wpis - pomijany z ostrzeżeniem."""
+    """'3580:250-6100, 3661, 3602:150-2700' → [CatalogSpec]. Błędny wpis - pomijany z ostrzeżeniem."""
     specs = []
     for part in (p.strip() for p in (text or "").split(",")):
         if not part:
@@ -215,8 +220,18 @@ class CatalogSource:
         self.single = single                         # CatalogSpec z SNIPER_CATALOG / SNIPER_PRICE_FROM/TO
         self._mtime = None
         self._specs = None
+        self._warned_retired = set()
 
     def get(self):
+        specs, dropped = drop_retired(self._get())
+        new = set(dropped) - self._warned_retired
+        if new:
+            self._warned_retired |= new
+            log.warning("[KATEGORIE] Pomijam wycofane katalogi ogólne %s (od 31.10 podzespoły mają własne katalogi; "
+                        "nowy catalogs.json da `python -m analyzer auto --force`).", ", ".join(map(str, sorted(new))))
+        return specs
+
+    def _get(self):
         if self.setting.lower() == "auto":
             try:
                 mtime = self.path.stat().st_mtime
@@ -255,6 +270,12 @@ TEST_KITS = {
     "tablet": "nic - ładowarka / kabel; sprawdź blokady (iCloud / Google), baterię",
     "console": "telewizor / monitor HDMI + pad (jeśli nie ma w zestawie)",
     "gpu": BENCH_GPU + "; GPU-Z, FurMark / OCCT 30 min",
+    "cpu": ("płyta z tym gniazdem + RAM + zasilacz (AM4: stanowisko A, LGA1700: stanowisko B); POST, Cinebench / "
+            "OCCT 15 min, temperatury; sprawdź piny / pady"),
+    "motherboard": ("procesor + RAM pasujące do gniazda (AM4: Ryzen 5 3600 + DDR4 ze stanowiska A, LGA1700: Pentium "
+                    "G7400 ze stanowiska B) + zasilacz; POST, BIOS, wszystkie sloty RAM i M.2, piny gniazda"),
+    "bundle": ("zasilacz + SSD ze stanowiska A (+ RAM, jeśli brak w zestawie); POST, BIOS, Cinebench / OCCT 15 min, "
+               "temperatury"),
 }
 
 

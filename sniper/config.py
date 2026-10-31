@@ -72,7 +72,8 @@ MAIN_PROXY = "glowne"
 EXTRA_PROXIES = range(2, 10)
 # Nazwy kategorii po polsku też działają (SNIPER_PROXY_2_KATEGORIE=telefony,konsole).
 CATEGORY_ALIASES = {"laptopy": "laptop", "telefony": "phone", "tablety": "tablet", "konsole": "console",
-                    "karty": "gpu", "karty graficzne": "gpu", "pamieci": "ram", "pamięci": "ram", "dyski": "storage"}
+                    "karty": "gpu", "karty graficzne": "gpu", "pamieci": "ram", "pamięci": "ram", "dyski": "storage",
+                    "procesory": "cpu", "plyty": "motherboard", "płyty": "motherboard", "zestawy": "bundle"}
 
 
 def _proxy_key(name):
@@ -81,7 +82,7 @@ def _proxy_key(name):
 
 
 def parse_categories(text):
-    """'telefony, console, 3582' → ['phone', 'console', '3582'] (kategoria albo numer katalogu)."""
+    """'telefony, console, 3602' → ['phone', 'console', '3602'] (kategoria albo numer katalogu)."""
     out = []
     for part in (p.strip().lower() for p in (text or "").split(",")):
         if part:
@@ -276,7 +277,7 @@ def _env_list(name, default=""):
 
 
 # Nasze kategorie (sniper/categories.py) - do list słów per kategoria: SNIPER_AI_KEYWORDS_PHONE itd.
-AI_CATEGORIES = ("laptop", "phone", "tablet", "console", "gpu", "ram", "storage")
+AI_CATEGORIES = ("laptop", "phone", "tablet", "console", "gpu", "ram", "storage", "cpu", "motherboard", "bundle")
 
 
 def _env_category_lists(prefix):
@@ -338,9 +339,24 @@ class AiConfig:
     # tokenów wejścia (~1 100 na zdjęcie przy domyślnej, 27.10: ~13,6 tys. tokenów na ofertę) - porównaj jakość
     # w `python -m sniper.bench` zanim zmienisz.
     media_resolution: str = _env("SNIPER_AI_MEDIA_RESOLUTION").lower()
-    # Wytyczne w zapytaniu: wszystkie (cała tabela kategorii, ~4-5 tys. tokenów) albo dopasowane (zasady + tylko
-    # wiersze pasujące do tytułu; ceny i tak są w <mediany> / <porownywalne>). Laptopy zawsze całe.
-    guide_rows: str = _env("SNIPER_AI_GUIDE_ROWS", "wszystkie").lower()
+    # Wytyczne w zapytaniu (31.10): rodzina (domyślnie) - w instrukcji systemowej tylko legenda tabeli (stała, więc
+    # tania w pamięci podręcznej dostawcy AI), a w wiadomości wiersze tabeli dla TEJ oferty: model i jego warianty,
+    # z opisu, rodzina / marka, sąsiednie kategorie (sniper/guides.py: route; ~0,5 tys. tokenów zamiast 4-13 tys.);
+    # wszystkie - cała tabela kategorii (najwyżej 80 wierszy, jak przed 31.10); dopasowane - zasady + wiersze
+    # pasujące do tytułu (bez laptopów).
+    guide_rows: str = _env("SNIPER_AI_GUIDE_ROWS", "rodzina").lower()
+    # Ocena dwuetapowa (31.10): najpierw szybka - krótkie myślenie (SNIPER_AI_QUICK_EFFORT) i zdjęcia w średniej
+    # rozdzielczości (SNIPER_AI_QUICK_MEDIA_RESOLUTION, ~560 zamiast ~1 100 tokenów na zdjęcie), ~2× taniej; pełna
+    # ocena (SNIPER_AI_EFFORT, SNIPER_AI_MEDIA_RESOLUTION) tylko, gdy szybka da okazję albo ≥ SNIPER_AI_CONFIRM_FROM.
+    # Dzień testowy 29.10: krótkie myślenie zgodne z pełnym w 99% decyzji (±1 pkt w 88%) - próg 6 przy okazji od 8
+    # zostawia zapas 2 pkt. false = jedna ocena z pełnymi ustawieniami (jak przed 31.10).
+    two_stage: bool = _env_bool("SNIPER_AI_TWO_STAGE", True)
+    quick_effort: str = _env("SNIPER_AI_QUICK_EFFORT", "low").lower()
+    quick_media_resolution: str = _env("SNIPER_AI_QUICK_MEDIA_RESOLUTION", "medium").lower()
+    confirm_from: float = _env_float("SNIPER_AI_CONFIRM_FROM", 6.0)
+    # Bez AI, gdy wynik i tak nie dałby maila ani ntfy (31.10): tryb mediany bez żadnej mediany z bazy (program
+    # przycina wtedy ocenę do 3) albo brak danych przy SNIPER_AI_NO_DATA_MAX_SCORE poniżej progu powiadomień.
+    skip_no_data: bool = _env_bool("SNIPER_AI_SKIP_NO_DATA", True)
     guidelines_file: str = _env("SNIPER_AI_GUIDELINES") or str(Path(__file__).with_name("guidelines.md"))
     # Wytyczne per kategoria z analizatora: <folder>/<kategoria>.md (+ catalogs.json z zakresami cen).
     guides_dir: str = _env("SNIPER_GUIDES_DIR") or str(Path(__file__).with_name("guides"))
