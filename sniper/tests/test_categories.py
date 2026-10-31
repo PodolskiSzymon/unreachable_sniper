@@ -643,45 +643,48 @@ def test_scout_queries_with_price_floor():
     assert requests == [("3661", "300"), ("3025", "400")]
 
 
-def test_full_page_of_new_offers_fetches_next_page_and_speeds_up(caplog):
-    """Na stronie 1 nie ma żadnej z ofert poprzedniego skanu (przyszło więcej, niż mieści strona) → dociągnięta strona 2
-    aż do pierwszej znanej oferty i szybszy skan (prośba użytkownika 2026-10-30)."""
+def test_full_page_of_new_offers_speeds_up_step_by_step(caplog):
+    """Na stronie 1 nie ma żadnej z ofert poprzedniego skanu = odświeżamy za wolno → odstęp TEGO katalogu krótszy
+    o krok (od zwykłego, najwyżej do minimum), bez pobierania strony 2; po spokojnym czasie wraca o krok
+    (prośba użytkownika 2026-10-31)."""
     market = [101, 100]                                    # najnowsze pierwsze (newest_first)
     pages = []
 
     def handler(request):
-        page, per_page = int(request.url.params["page"]), int(request.url.params["per_page"])
-        pages.append(page)
-        ids = market[(page - 1) * per_page: page * per_page]
-        return httpx.Response(200, json={"items": [{"id": i, "title": "iPhone", "user": {}} for i in ids]})
+        pages.append(int(request.url.params["page"]))
+        return httpx.Response(200, json={"items": [{"id": i, "title": "iPhone", "user": {}} for i in market[:2]]})
 
     async def scenario():
         session = VintedSession()
         session.client = httpx.AsyncClient(transport=httpx.MockTransport(handler), headers=session.client.headers)
-        cfg = ScoutConfig(category="3661", catalogs="", per_page=2, price_floor=0, poll_interval=8.0, poll_min=2.0,
-                          fast_minutes=10.0, gap_pages=1)
+        cfg = ScoutConfig(category="3661", catalogs="", per_page=2, price_floor=0, poll_interval=10.0, poll_min=3.0,
+                          poll_step=3.0, fast_minutes=10.0)
         scout = Scout(cfg, session, EmailNotifier(SmtpConfig()))
-        inspected = []
 
         async def fake_inspect(item, spec, category):
-            inspected.append(item["id"])
+            return None
         scout.inspect = fake_inspect
         await scout.poll_catalog()                         # rozgrzewka: pamięta 101, 100
-        market[:0] = [104, 103, 102]                       # 3 nowe oferty przy stronie na 2
-        await scout.poll_catalog()
+        periods = []
+        for burst in range(4):                             # za każdym razem 3 nowe oferty przy stronie na 2
+            market[:0] = [1000 + 10 * burst + i for i in range(3)]
+            await scout.poll_catalog()
+            periods.append(scout.lanes["glowne"].fast[("3661", "100", "")]["period"])
         await asyncio.gather(*scout._tasks)
         await session.close()
-        return scout, inspected
+        return scout, periods
 
-    scout, inspected = asyncio.run(scenario())
-    assert pages == [1, 1, 2]                              # strona 2 dociągnięta; dalej nie - jest na niej znana 101
-    assert sorted(inspected) == [102, 103, 104]            # 102 była tylko na stronie 2 - bez dociągnięcia by umknęła
-    assert list(scout._per_catalog.values()) == [[2, 3, 3, 1]]
+    scout, periods = asyncio.run(scenario())
+    assert set(pages) == {1}                               # bez strony 2
+    assert periods == [7.0, 4.0, 3.0, 3.0]                 # 10 → 7 → 4 → minimum 3
     assert "cała strona (2) to nowe oferty" in caplog.text
     lane = scout.lanes["glowne"]
-    (spec, until), = lane.fast.values()                    # przyspieszony tylko ten katalog
-    assert spec.catalog_id == "3661" and lane.min_interval == 2.0
-    scout._expire_fast(lane, until + 1)                    # minęło SNIPER_FAST_MINUTES
+    boost = lane.fast[("3661", "100", "")]
+    scout._relax(lane, boost["since"] + 601)               # 10 min spokoju → o krok wolniej
+    assert boost["period"] == 6.0
+    scout._relax(lane, boost["since"] + 601)
+    assert boost["period"] == 9.0
+    scout._relax(lane, boost["since"] + 601)               # 12 ≥ zwykłe 10 → zwykłe tempo
     assert lane.fast == {}
 
 

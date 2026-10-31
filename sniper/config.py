@@ -591,14 +591,13 @@ class ScoutConfig:
     poll_jitter: float = _env_float("SNIPER_POLL_JITTER", 1.0)       # losowe odchylenie +/- jitter sekund
     # Dodatkowe proxy i ich kategorie (SNIPER_PROXY_<N>_KATEGORIE, patrz proxy_routes_from_env); puste = jedno proxy.
     proxy_routes: dict = field(default_factory=proxy_routes_from_env)
-    # Przyspieszanie (2026-10-30, prośba użytkownika): gdy w skanie katalogu nie ma ŻADNEJ z `overlap_ids` najnowszych
-    # ofert z poprzedniego skanu tego katalogu (przyszło więcej, niż mieści strona), dociągamy do `gap_pages` kolejnych
-    # stron (nic nie umyka), a TEN katalog (nie całe proxy) jest skanowany co `poll_min` s przez `fast_minutes` minut
-    # od ostatniego takiego skanu. poll_min = minimalny odstęp między dwoma skanami jednego proxy (także przy
-    # przyspieszeniu); fast_minutes 0 = bez przyspieszania.
+    # Przyspieszanie (prośba użytkownika 2026-10-31): gdy w skanie katalogu nie ma ŻADNEJ z `overlap_ids` najnowszych
+    # ofert z poprzedniego skanu (przyszło więcej, niż mieści strona = odświeżamy za wolno), odstęp TEGO katalogu
+    # skraca się o `poll_step` s - od zwykłego, najwyżej do `poll_min` (minimalny odstęp dwóch skanów jednego proxy).
+    # Po `fast_minutes` minutach bez przepełnienia wraca o krok w górę, aż do zwykłego. Inne katalogi bez zmian.
     overlap_ids: int = _env_int("SNIPER_OVERLAP_IDS", 5)
-    gap_pages: int = _env_int("SNIPER_GAP_PAGES", 1)
     poll_min: float = _env_float("SNIPER_POLL_MIN", _env_float("SNIPER_POLL_FAST", 3.0))
+    poll_step: float = _env_float("SNIPER_POLL_STEP", 3.0)
     fast_minutes: float = _env_float("SNIPER_FAST_MINUTES", 10.0)
     # Kursy walut (wysyłka w walucie sprzedawcy → zł) z pliku, którego używa Vinted (sniper/fx.py): co tyle godzin;
     # 0 = tylko kursy stałe (FX_TO_PLN / SNIPER_FX_RATES).

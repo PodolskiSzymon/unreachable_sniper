@@ -20,7 +20,7 @@ stara kopia, nie czytać.
 
 | plik | rola |
 |---|---|
-| `__main__.py`, `scout.py` | pętle Zwiadowcy – jedna na proxy (`SNIPER_PROXY_<N>_HOST/_AUTH/_KATEGORIE`, `Lane`, osobne sesje): katalogi po kolei (wagi), nowe ID, przepełnienie strony (brak ofert poprzedniego skanu) → strona 2 + dodatkowe skany TEGO katalogu co `SNIPER_POLL_MIN`, szczegóły przez to samo proxy, `emit` → evaluator; heartbeat |
+| `__main__.py`, `scout.py` | pętle Zwiadowcy – jedna na proxy (`SNIPER_PROXY_<N>_HOST/_AUTH/_KATEGORIE`, `Lane`, osobne sesje): katalogi po kolei (wagi), nowe ID, przepełnienie strony (brak ofert poprzedniego skanu) → TEN katalog częściej o `SNIPER_POLL_STEP` s (do `SNIPER_POLL_MIN`), po `SNIPER_FAST_MINUTES` spokoju o krok wolniej, szczegóły przez to samo proxy, `emit` → evaluator; heartbeat |
 | `categories.py` | katalogi z `guides/catalogs.json`, `apply_floor` (`SNIPER_PRICE_FLOOR`), `schedule`, kategoria z tytułu, sprzęt do testu |
 | `session.py`, `proxy_relay.py`, `traffic.py` | httpx przez proxy, odświeżanie ciastek Playwrightem, licznik transferu |
 | `fx.py` | kursy walut (wysyłka → zł) z pliku prebid, którego używa Vinted; co `SNIPER_FX_REFRESH_H` h, bez proxy |

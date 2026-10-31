@@ -220,7 +220,7 @@ def test_burst_in_one_catalog_speeds_up_only_that_catalog(monkeypatch):
     async def scenario():
         session = _session(handler)
         cfg = ScoutConfig(category="3580", catalogs="3661:300-3600, 3584:300-2700", price_floor=0, log_dir="",
-                          per_page=2, gap_pages=0, poll_interval=0.2, poll_min=0.02, poll_jitter=0.0,
+                          per_page=2, poll_interval=0.2, poll_min=0.02, poll_step=0.19, poll_jitter=0.0,
                           fast_minutes=10.0, heartbeat_interval=0, session_max_age_min=0)
         scout = Scout(cfg, session, EmailNotifier(SmtpConfig()))
 
@@ -235,5 +235,5 @@ def test_burst_in_one_catalog_speeds_up_only_that_catalog(monkeypatch):
         return scout
 
     scout = asyncio.run(scenario())
-    assert [spec.catalog_id for spec, _ in scout.lanes["glowne"].fast.values()] == [3661]
+    assert [b["spec"].catalog_id for b in scout.lanes["glowne"].fast.values()] == [3661]
     assert scans["3661"] >= 4 * scans["3584"] and scans["3584"] <= 5     # RAM co ~0,4 s (2 katalogi × 0,2 s)
