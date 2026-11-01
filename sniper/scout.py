@@ -25,7 +25,7 @@ from .dedup import RecentIds
 from .extractor import build_offer, inactive_reason, item_url, unwrap_sidebar
 from .notifier import EmailNotifier
 from .proxy_relay import PROXY_AUTH_HELP
-from .session import RateLimited, SessionExpired, VintedSession
+from .session import ProxyAuthFailed, RateLimited, SessionExpired, VintedSession
 
 log = logging.getLogger("sniper.scout")
 
@@ -85,6 +85,8 @@ class Lane:
     last_scan: dict = field(default_factory=dict)  # katalog → kiedy ostatnio skanowany
     # katalog → {"spec": CatalogSpec, "period": odstęp jego skanów (s), "normal": zwykły odstęp, "since": ostatnia zmiana}
     fast: dict = field(default_factory=dict)
+    failures: int = 0             # nieudane serie odświeżania sesji z rzędu (rosnąca przerwa tego proxy)
+    alerted: bool = False         # powiadomienie o padniętym proxy już poszło (jedno na awarię)
 
     @property
     def label(self):
@@ -407,6 +409,7 @@ class Scout:
             shared = asyncio.Lock()          # przeglądarki (odświeżanie sesji) po kolei - serwer ma 4 GB RAM
             for lane in lanes:
                 lane.session.browser_lock = shared
+                lane.session.name = lane.label
         if len(lanes) > 1 or self.routes:
             for lane in lanes:
                 mine = [s for s in specs if self.lane_for(s) is lane]
@@ -455,18 +458,19 @@ class Scout:
                     lane.last_request = lane.last_scan[spec_key(spec)] = time.monotonic()
                     await self.poll_catalog(spec, lane)
                 backoff = 0.0
+                self._lane_ok(lane)
             except RateLimited:
                 backoff = min(max(backoff * 2, 10.0), 120.0)
                 log.warning("[SCOUT] %s429 Too Many Requests - czekam %.0fs.", self._tag(lane), backoff)
+            except ProxyAuthFailed as exc:
+                backoff = self._lane_failed(lane, str(exc), auth=True)
             except SessionExpired as exc:
-                backoff = self.cfg.refresh_backoff
-                log.error("[SCOUT] %s%s - czekam %.0fs.", self._tag(lane), exc, backoff)
+                backoff = self._lane_failed(lane, str(exc))
             except (httpx.TransportError, httpx.HTTPStatusError, ValueError) as exc:
                 # Błąd proxy/sieci/JSON - przy rotacyjnym proxy następne żądanie pójdzie z innego IP.
                 backoff = min(max(backoff * 2, 2.0), 30.0)
                 if isinstance(exc, httpx.ProxyError) and "407" in str(exc):
-                    backoff = self.cfg.refresh_backoff
-                    log.error("[SCOUT] %s%s Ponawiam za %.0fs.", self._tag(lane), PROXY_AUTH_HELP, backoff)
+                    backoff = self._lane_failed(lane, PROXY_AUTH_HELP, auth=True)
                 else:
                     log.warning("[SCOUT] %sBłąd skanu: %r - ponawiam za %.0fs.", self._tag(lane), exc, backoff)
                 self._stats["errors"] += 1
@@ -480,6 +484,44 @@ class Scout:
             if backoff:
                 await asyncio.sleep(backoff)
                 lane.next_normal = max(lane.next_normal, time.monotonic())
+
+    def _lane_failed(self, lane, reason, auth=False):
+        """Nieudana seria odświeżania sesji (albo 407) jednego proxy → przerwa TYLKO tego proxy, rosnąca z każdą
+        kolejną porażką (SNIPER_REFRESH_BACKOFF × 2^n, najwyżej SNIPER_REFRESH_BACKOFF_MAX; przy 407 od
+        SNIPER_PROXY_AUTH_COOLDOWN) - padnięte proxy nie zajmuje co chwilę wspólnej przeglądarki. Po kilku porażkach
+        z rzędu (albo od razu przy 407) jedno powiadomienie na telefon. → przerwa (s)."""
+        lane.failures += 1
+        if auth:
+            base = getattr(self.cfg, "proxy_auth_cooldown", 600.0)
+            cap = max(3600.0, base)
+        else:
+            base = self.cfg.refresh_backoff
+            cap = max(getattr(self.cfg, "refresh_backoff_max", 600.0), base)
+        backoff = min(base * 2 ** min(lane.failures - 1, 20), cap)
+        log.error("[SCOUT] %s%s - to proxy czeka %.0f s (porażka %d z rzędu, inne proxy skanują dalej).",
+                  self._tag(lane), reason, backoff, lane.failures)
+        if not lane.alerted and (auth or lane.failures >= getattr(self.cfg, "proxy_alert_after", 3)):
+            lane.alerted = True
+            self._alert(f"Sniper: {lane.label} nie działa",
+                        ("Proxy odrzuca dane logowania (407) - sprawdź saldo / login i hasło u dostawcy. "
+                         if auth else "Nie udaje się odświeżyć sesji Vinted przez to proxy. ")
+                        + f"Kategorie tego proxy nie są skanowane (ponawiam co {backoff:.0f} s).")
+        return backoff
+
+    def _lane_ok(self, lane):
+        if lane.failures:
+            log.info("[SCOUT] %sproxy znów działa (po %d nieudanych seriach).", self._tag(lane), lane.failures)
+            if lane.alerted:
+                self._alert(f"Sniper: {lane.label} znów działa", "Skanowanie kategorii tego proxy wznowione.", 3)
+        lane.failures, lane.alerted = 0, False
+
+    def _alert(self, title, text, priority=4):
+        """Powiadomienie systemowe na telefon (ntfy), jeśli włączone; błąd wysyłki tylko w logu."""
+        push = getattr(self.evaluator, "push", None) if self.evaluator else None
+        if push is None or not hasattr(push, "send"):
+            return
+        msg = {"topic": push.cfg.topic, "title": title, "message": text, "priority": priority, "tags": ["warning"]}
+        self._spawn(push.send(msg))
 
     def _tag(self, lane):
         """Przedrostek logu z nazwą proxy - tylko gdy pętli jest kilka."""

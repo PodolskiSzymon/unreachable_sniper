@@ -15,11 +15,16 @@ log = logging.getLogger("sniper.proxy_relay")
 _HEADER_LIMIT = 64 * 1024
 
 PROXY_AUTH_HELP = (
-    "IPRoyal odrzucił dane logowania (407 Proxy Authentication Required). Sprawdź: "
-    "1) saldo transferu / ważność planu w panelu IPRoyal, "
-    "2) SNIPER_PROXY_AUTH (LOGIN:HASLO_country-pl) w sniper/.env - literówka albo nowe hasło, "
-    "3) ograniczenia dostępu (whitelist IP) w ustawieniach IPRoyal."
+    "Proxy odrzuciło dane logowania (407 Proxy Authentication Required). Sprawdź u dostawcy tego proxy: "
+    "1) saldo transferu / ważność planu, "
+    "2) login i hasło w sniper/.env (SNIPER_PROXY_AUTH albo SNIPER_PROXY_<N>_AUTH) - literówka albo nowe hasło, "
+    "3) ograniczenia dostępu (whitelist IP) w panelu dostawcy."
 )
+
+
+def proxy_auth_help(host=None):
+    """Komunikat o 407 z nazwą serwera proxy (bez loginu i hasła) - przy kilku proxy wiadomo, które padło."""
+    return f"[{host}] {PROXY_AUTH_HELP}" if host else PROXY_AUTH_HELP
 
 
 class ProxyAuthRejected(Exception):
@@ -56,6 +61,11 @@ class ProxyRelay:
         self._server = None
         self._connections = set()
         self.auth_rejected = False     # True, jeśli upstream odpowiedział 407
+        self.rejected = asyncio.Event()  # to samo jako zdarzenie - przeglądarka nie czeka wtedy do limitu czasu
+
+    @property
+    def host(self):
+        return self._host
 
     @property
     def server(self):
@@ -105,7 +115,8 @@ class ProxyRelay:
             status = reply.split(b" ", 2)[1:2]
             if status == [b"407"] and not self.auth_rejected:
                 self.auth_rejected = True
-                log.error("[RELAY] %s", PROXY_AUTH_HELP)
+                self.rejected.set()
+                log.error("[RELAY] %s", proxy_auth_help(self._host))
             self._count_received(len(reply))
             client_writer.write(reply)
             await client_writer.drain()

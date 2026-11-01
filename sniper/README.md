@@ -274,9 +274,13 @@ nigdy w repo ani w czacie. To tylko narzędzie diagnostyczne - przeglądarka kon
   Cena jest dodatkowo sprawdzana po pobraniu szczegółów.
 * **Playwright i proxy z hasłem**: przeglądarka łączy się z `127.0.0.1` (przekaźnik), a ten z IPRoyal z Twoim loginem i hasłem.
 * **Odświeżanie sesji**: `SNIPER_REFRESH_ATTEMPTS` prób (domyślnie 6) co `SNIPER_REFRESH_RETRY_DELAY` s (5),
-  każda z limitem `SNIPER_REFRESH_TIMEOUT` s (90) i przez nowe IP; po nieudanej serii przerwa `SNIPER_REFRESH_BACKOFF` s (30)
-  i kolejna seria. Zerwane połączenia od proxy (WinError 10054) lądują tylko w pliku logu.
-  Przy 407 od IPRoyal (złe hasło, brak transferu) seria jest przerywana od razu z opisem, co sprawdzić.
+  każda z limitem `SNIPER_REFRESH_TIMEOUT` s (60) i przez nowe IP; po nieudanej serii przerwa `SNIPER_REFRESH_BACKOFF` s (30),
+  przy kolejnych porażkach tego samego proxy ×2 (do `SNIPER_REFRESH_BACKOFF_MAX`, 600 s). Zerwane połączenia od proxy
+  (WinError 10054) lądują tylko w pliku logu. Wspólna przeglądarka jest zajmowana tylko na czas jednej próby, więc
+  padnięte proxy nie wstrzymuje odświeżania (ani skanowania) pozostałych.
+  Przy 407 od proxy (złe hasło, brak transferu) wizyta jest przerywana natychmiast, to proxy czeka
+  `SNIPER_PROXY_AUTH_COOLDOWN` s (600, ×2 do 1 h), a na telefon idzie jedno powiadomienie (ntfy; po
+  `SNIPER_PROXY_ALERT_AFTER` nieudanych seriach także bez 407) i drugie, gdy proxy znów działa.
 * **Oszczędzanie transferu przy odświeżaniu sesji** (pełna wizyta przeglądarki to ~9 MB):
   `SNIPER_BROWSER_LIGHT=true` blokuje obrazki, wideo, fonty i skrypty reklamowo-analityczne;
   sesja (ciastka + tokeny) jest zapisywana w `sniper/logs/session.json` i używana po restarcie,

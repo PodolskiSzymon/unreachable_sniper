@@ -237,3 +237,124 @@ def test_burst_in_one_catalog_speeds_up_only_that_catalog(monkeypatch):
     scout = asyncio.run(scenario())
     assert [b["spec"].catalog_id for b in scout.lanes["glowne"].fast.values()] == [3661]
     assert scans["3661"] >= 4 * scans["3603"] and scans["3603"] <= 5     # RAM co ~0,4 s (2 katalogi × 0,2 s)
+
+
+# ---------------------------------------------------------------- padnięte proxy nie wstrzymuje innych (2026-11-01)
+def test_proxy_407_aborts_browser_visit_at_once(monkeypatch):
+    """407 od proxy przerywa wizytę przeglądarki od razu (wcześniej czekała do limitu próby i gubiła 407)."""
+    async def upstream(reader, writer):
+        await reader.readuntil(b"\r\n\r\n")
+        writer.write(b"HTTP/1.1 407 Proxy Authentication Required\r\nContent-Length: 0\r\n\r\n")
+        await writer.drain()
+        writer.close()
+
+    async def hanging_browser(cfg, wait_ms, light):
+        host, port = cfg["server"].rsplit("/", 1)[1].split(":")
+        reader, writer = await asyncio.open_connection(host, int(port))
+        writer.write(b"CONNECT www.vinted.pl:443 HTTP/1.1\r\n\r\n")
+        await writer.drain()
+        await asyncio.sleep(60)                           # Chromium „wisi” po ERR_PROXY_AUTH_UNSUPPORTED
+    monkeypatch.setattr(sess, "_browse_vinted", hanging_browser)
+
+    async def scenario():
+        server = await asyncio.start_server(upstream, "127.0.0.1", 0)
+        port = server.sockets[0].getsockname()[1]
+        started = time.monotonic()
+        try:
+            await sess._browse_via_proxy(f"http://U:ZLE@127.0.0.1:{port}", 1000)
+        except sess.ProxyAuthRejected as exc:
+            return time.monotonic() - started, str(exc)
+        finally:
+            server.close()
+
+    took, message = asyncio.run(scenario())
+    assert took < 5 and "407" in message and "127.0.0.1" in message and "ZLE" not in message
+
+
+def test_407_ends_refresh_series_without_retries(monkeypatch):
+    calls = []
+
+    async def rejected(*a, **k):
+        calls.append(1)
+        raise sess.ProxyAuthRejected("407")
+    monkeypatch.setattr(sess, "fetch_fresh_tokens", rejected)
+
+    async def scenario():
+        session = VintedSession(refresh_attempts=6, refresh_retry_delay=0)
+        try:
+            await session.refresh()
+        except sess.ProxyAuthFailed:
+            return True
+        finally:
+            await session.close()
+
+    assert asyncio.run(scenario()) is True and len(calls) == 1
+
+
+def test_failing_proxy_does_not_hold_shared_browser(monkeypatch):
+    """Seria nieudanych prób jednego proxy zajmuje przeglądarkę tylko na czas próby - inne proxy odświeża się
+    w przerwie między próbami (log 01.11: laptopy stały 11 min, bo proxy 2 trzymało blokadę przez 6 prób)."""
+    order = []
+
+    async def fake_fetch(proxy_url, wait_ms, meter=None, light=True):
+        await asyncio.sleep(0.05)
+        if proxy_url == "http://zly:1":
+            order.append("zly-próba")
+            raise TimeoutError()
+        order.append("dobry-ok")
+        return [], {"x-csrf-token": "t"}
+    monkeypatch.setattr(sess, "fetch_fresh_tokens", fake_fetch)
+
+    async def scenario():
+        lock = asyncio.Lock()
+        bad = VintedSession(proxy_url="http://zly:1", refresh_attempts=3, refresh_retry_delay=0.2)
+        good = VintedSession(proxy_url="http://dobry:1")
+        bad.browser_lock = good.browser_lock = lock
+        failed = asyncio.ensure_future(bad.refresh())
+        await asyncio.sleep(0.01)
+        await good.refresh()                               # nie czeka na wszystkie 3 próby złego proxy
+        done_early = not failed.done()
+        try:
+            await failed
+        except sess.SessionExpired:
+            pass
+        for s in (bad, good):
+            await s.close()
+        return done_early
+
+    assert asyncio.run(scenario()) is True
+    assert order.index("dobry-ok") < len(order) - 1 and order.count("zly-próba") == 3
+
+
+def test_lane_backoff_grows_and_alerts_once(monkeypatch):
+    sent = []
+
+    class FakePush:
+        cfg = type("C", (), {"topic": "temat"})()
+
+        async def send(self, msg):
+            sent.append(msg)
+            return True
+
+    async def scenario():
+        cfg = ScoutConfig(category="3661", catalogs="", price_floor=0, refresh_backoff=30, refresh_backoff_max=600,
+                          proxy_auth_cooldown=600, proxy_alert_after=3)
+        session = VintedSession()
+        scout = Scout(cfg, session, EmailNotifier(SmtpConfig()))
+        scout.evaluator = type("E", (), {"push": FakePush()})()
+        lane = scout.lanes[MAIN_PROXY]
+        waits = [scout._lane_failed(lane, "timeout") for _ in range(6)]
+        alerts_after_series = len(sent)
+        scout._lane_ok(lane)
+        auth = [scout._lane_failed(lane, "407", auth=True) for _ in range(5)]
+        await asyncio.sleep(0)
+        await asyncio.gather(*scout._tasks)
+        await session.close()
+        return waits, alerts_after_series, auth, lane
+
+    waits, alerts, auth, lane = asyncio.run(scenario())
+    assert waits == [30, 60, 120, 240, 480, 600]
+    assert auth == [600, 1200, 2400, 3600, 3600]
+    assert [m["title"] for m in sent] == ["Sniper: proxy glowne nie działa", "Sniper: proxy glowne znów działa",
+                                          "Sniper: proxy glowne nie działa"]
+    assert "407" in sent[2]["message"] and lane.failures == 5

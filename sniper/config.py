@@ -657,8 +657,14 @@ class ScoutConfig:
     # Odświeżanie sesji przez Playwright (przy rotacyjnym proxy każda próba = nowe IP):
     refresh_attempts: int = _env_int("SNIPER_REFRESH_ATTEMPTS", 6)          # prób w jednej serii
     refresh_retry_delay: float = _env_float("SNIPER_REFRESH_RETRY_DELAY", 5.0)  # s między próbami
-    refresh_timeout: float = _env_float("SNIPER_REFRESH_TIMEOUT", 90.0)    # s limitu na jedną próbę
+    refresh_timeout: float = _env_float("SNIPER_REFRESH_TIMEOUT", 60.0)    # s limitu na jedną próbę (udana ~20 s)
     refresh_backoff: float = _env_float("SNIPER_REFRESH_BACKOFF", 30.0)    # s przerwy po nieudanej serii
+    # Kolejne nieudane serie tego samego proxy: przerwa ×2 za każdym razem, najwyżej tyle s (inne proxy skanują dalej).
+    refresh_backoff_max: float = _env_float("SNIPER_REFRESH_BACKOFF_MAX", 600.0)
+    # 407 (proxy odrzuca login/hasło, brak transferu): przerwa tego proxy od tylu s (×2 przy kolejnych, do 1 h).
+    proxy_auth_cooldown: float = _env_float("SNIPER_PROXY_AUTH_COOLDOWN", 600.0)
+    # Po tylu nieudanych seriach z rzędu (407 - od razu) jedno powiadomienie ntfy „proxy N nie działa”.
+    proxy_alert_after: int = _env_int("SNIPER_PROXY_ALERT_AFTER", 3)
     # Lekka przeglądarka: bez obrazków/wideo/fontów i skryptów reklamowych (wizyta ~9 MB -> ułamek tego).
     browser_light: bool = _env_bool("SNIPER_BROWSER_LIGHT", True)
     # Sesja (ciastka + tokeny) zapisywana na dysk i używana po restarcie, jeśli młodsza niż tyle minut

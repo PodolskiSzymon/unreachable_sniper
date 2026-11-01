@@ -14,7 +14,7 @@ from urllib.parse import unquote, urlsplit
 import httpx
 
 from .config import BASE_HEADERS, BASE_URL, BROWSER_USER_AGENT
-from .proxy_relay import PROXY_AUTH_HELP, ProxyAuthRejected, ProxyRelay
+from .proxy_relay import ProxyAuthRejected, ProxyRelay, proxy_auth_help
 from .traffic import TrafficMeter
 
 log = logging.getLogger("sniper.session")
@@ -25,6 +25,10 @@ AUTH_ERRORS = (401, 403)
 
 class SessionExpired(Exception):
     """Vinted odrzucił żądanie (401/403) nawet po odświeżeniu sesji."""
+
+
+class ProxyAuthFailed(SessionExpired):
+    """Proxy odrzuciło dane logowania (407) - ponowienia nic nie dadzą, trzeba poprawić .env / doładować konto."""
 
 
 class RateLimited(Exception):
@@ -131,12 +135,20 @@ async def _browse_via_proxy(proxy_url, wait_ms, meter=None, light=True):
     # więc idziemy przez lokalny przekaźnik, który sam dokleja Proxy-Authorization.
     on_bytes = (lambda sent, received: meter.add("browser", sent, received, requests=0)) if meter else None
     async with ProxyRelay(proxy_url, on_bytes=on_bytes) as relay:
+        # 407 od proxy przerywa wizytę OD RAZU (2026-11-01): wcześniej przeglądarka wisiała do limitu próby
+        # (SNIPER_REFRESH_TIMEOUT), a timeout gubił informację o 407 - 6 prób × 90 s z zajętą przeglądarką.
+        browse = asyncio.ensure_future(_browse_vinted({"server": relay.server}, wait_ms, light))
+        rejected = asyncio.ensure_future(relay.rejected.wait())
         try:
-            return await _browse_vinted({"server": relay.server}, wait_ms, light)
-        except Exception as exc:
-            if relay.auth_rejected:
-                raise ProxyAuthRejected(PROXY_AUTH_HELP) from exc
-            raise
+            await asyncio.wait({browse, rejected}, return_when=asyncio.FIRST_COMPLETED)
+        finally:
+            for task in (browse, rejected):
+                if not task.done():
+                    task.cancel()
+            await asyncio.gather(browse, rejected, return_exceptions=True)
+        if relay.auth_rejected and not (browse.done() and not browse.cancelled() and browse.exception() is None):
+            raise ProxyAuthRejected(proxy_auth_help(relay.host))
+        return browse.result()
 
 
 async def fetch_fresh_tokens(proxy_url=None, wait_ms=15000, meter=None, light=True):
@@ -193,6 +205,7 @@ class VintedSession:
         # Wspólna dla kilku sesji (kilka proxy, scout.Scout): przeglądarki odświeżają się po kolei, nie naraz -
         # serwer ma 4 GB RAM. None = jedna sesja, bez czekania.
         self.browser_lock = None
+        self.name = None               # np. "proxy 2" - przedrostek logów [AUTH] przy kilku proxy (scout.Scout)
         self.traffic = TrafficMeter()
         self.client = httpx.AsyncClient(
             proxy=self._proxy_url,
@@ -205,6 +218,9 @@ class VintedSession:
     async def close(self):
         await self.client.aclose()
 
+    def _tag(self):
+        return f"{self.name}: " if self.name else ""
+
     async def refresh(self, seen_generation=None):
         """Odświeża ciastka i tokeny. Pomija, jeśli ktoś inny już to zrobił w międzyczasie."""
         async with self._lock:
@@ -212,11 +228,10 @@ class VintedSession:
                 return
             self._ready.clear()
             try:
-                async with self.browser_lock or contextlib.nullcontext():
-                    cookies, tokens = await self._fetch_with_retries()
+                cookies, tokens = await self._fetch_with_retries()
                 self._apply(cookies, tokens)
                 self._save_state(cookies, tokens)
-                log.info("[AUTH] Sesja httpx zaktualizowana (generacja %d).", self._generation)
+                log.info("[AUTH] %sSesja httpx zaktualizowana (generacja %d).", self._tag(), self._generation)
             finally:
                 self._ready.set()
 
@@ -270,19 +285,23 @@ class VintedSession:
         last_error = None
         for attempt in range(1, attempts + 1):
             try:
-                return await asyncio.wait_for(fetch_fresh_tokens(self._proxy_url, self._browser_wait_ms,
-                                                                 meter=self.traffic,
-                                                                 light=self._browser_light),
-                                              self._refresh_timeout)
+                # Wspólna przeglądarka (browser_lock) tylko na czas JEDNEJ próby (2026-11-01): między próbami
+                # mogą odświeżyć się inne proxy - wcześniej seria 6 nieudanych prób jednego proxy (do ~10 min)
+                # wstrzymywała skanowanie wszystkich kategorii.
+                async with self.browser_lock or contextlib.nullcontext():
+                    return await asyncio.wait_for(fetch_fresh_tokens(self._proxy_url, self._browser_wait_ms,
+                                                                     meter=self.traffic,
+                                                                     light=self._browser_light),
+                                                  self._refresh_timeout)
             except ProxyAuthRejected as exc:
                 # Kolejne próby nic nie dadzą - złe dane albo brak transferu na koncie proxy.
-                raise SessionExpired(str(exc)) from exc
+                raise ProxyAuthFailed(str(exc)) from exc
             except Exception as exc:
                 last_error = exc
                 reason = (str(exc).splitlines() or [""])[0] or type(exc).__name__
                 if attempt < attempts:
-                    log.warning("[AUTH] Próba %d/%d odświeżenia nieudana (%s) - ponawiam za %.0fs (nowe IP).",
-                                attempt, attempts, reason, self._refresh_retry_delay)
+                    log.warning("[AUTH] %sPróba %d/%d odświeżenia nieudana (%s) - ponawiam za %.0fs (nowe IP).",
+                                self._tag(), attempt, attempts, reason, self._refresh_retry_delay)
                     await asyncio.sleep(self._refresh_retry_delay)
         reason = (str(last_error).splitlines() or [""])[0] or type(last_error).__name__
         raise SessionExpired(f"Odświeżenie sesji nie powiodło się po {attempts} próbach: {reason}") from last_error
@@ -300,7 +319,8 @@ class VintedSession:
 
             if response.status_code in AUTH_ERRORS:
                 if attempt == 0:
-                    log.warning("[AUTH] %s dla %s - wstrzymuję HTTP i odświeżam sesję.", response.status_code, url)
+                    log.warning("[AUTH] %s%s dla %s - wstrzymuję HTTP i odświeżam sesję.", self._tag(), response.status_code,
+                                url)
                     await self.refresh(seen_generation=generation)
                     continue
                 raise SessionExpired(f"{response.status_code} po odświeżeniu sesji: {url}")
