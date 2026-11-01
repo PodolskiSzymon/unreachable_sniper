@@ -371,6 +371,9 @@ class AiConfig:
     # Bez AI, gdy wynik i tak nie dałby maila ani ntfy (31.10): tryb mediany bez żadnej mediany z bazy (program
     # przycina wtedy ocenę do 3) albo brak danych przy SNIPER_AI_NO_DATA_MAX_SCORE poniżej progu powiadomień.
     skip_no_data: bool = _env_bool("SNIPER_AI_SKIP_NO_DATA", True)
+    # Bez AI ogłoszenia „kupię / szukam / zamienię” i same akcesoria w tytule (pad, etui, ładowarka…) - 01.11, dane bazy:
+    # nigdy okazja, a przechodzą próg ceny (pad DualSense Edge ~600 zł). false = wyłączone.
+    skip_junk: bool = _env_bool("SNIPER_AI_SKIP_JUNK", True)
     guidelines_file: str = _env("SNIPER_AI_GUIDELINES") or str(Path(__file__).with_name("guidelines.md"))
     # Wytyczne per kategoria z analizatora: <folder>/<kategoria>.md (+ catalogs.json z zakresami cen).
     guides_dir: str = _env("SNIPER_GUIDES_DIR") or str(Path(__file__).with_name("guides"))

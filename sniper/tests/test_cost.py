@@ -319,3 +319,26 @@ def test_openrouter_set_uses_openrouter_key(monkeypatch, tmp_path):
     ev = bench.evaluators["or_qwen_vl30"][1]
     assert (ev.cfg.api_key, ev.cfg.model, ev.cfg.two_stage) == ("klucz-or", "qwen/qwen3-vl-30b-a3b-instruct", False)
     assert ev._price_in == 0.15
+
+
+def test_junk_offers_skipped_before_ai(tmp_path):
+    from sniper.evaluator import junk_reason, prefilter
+    cfg = ai_cfg(tmp_path, keywords=(), price_max=None)
+    for title in ("Kupię iPhone 13", "Szukam PS5", "Zamienię PS5 na PC", "Pad do PS5 DualSense Edge",
+                  "Kontroler Xbox Elite 2", "Etui iPhone 15 Pro", "Ładowarka MacBook 96W"):
+        assert junk_reason(phone(title=title)), title
+        assert prefilter(phone(title=title), cfg), title
+    for title in ("iPhone 13 128GB", "Wymienię lub sprzedam PS5", "PS5 + pad + gry", "Konsola Xbox + kontroler",
+                  "Pad i konsola Switch", "Steam Deck 512GB"):
+        assert junk_reason(phone(title=title)) is None, title
+    assert prefilter(phone(title="Pad PS5"), ai_cfg(tmp_path, keywords=(), skip_junk=False)) is None
+
+
+def test_impossible_variant_capped():
+    from sniper.evaluator import cap_impossible_variant
+    ev = cap_impossible_variant({"score": 9.0, "is_deal": True}, phone(title="Steam deck OLED 256GB"))
+    assert ev["score"] == 7.0 and "LCD" in ev["red_flags"][0]
+    assert cap_impossible_variant({"score": 9.0}, phone(title="iPhone 14 64GB"))["score"] == 7.0
+    assert cap_impossible_variant({"score": 9.0}, phone(title="iPhone 15 Pro Max 128 GB"))["score"] == 7.0
+    for title in ("Steam deck 512gb OLED", "iPhone 14 PRO 128GB", "iPhone 12 64GB", "Steam Deck LCD 256GB"):
+        assert cap_impossible_variant({"score": 9.0}, phone(title=title))["score"] == 9.0, title

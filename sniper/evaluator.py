@@ -179,9 +179,37 @@ def _offer_price(offer):
     return purchase_cost(offer)
 
 
+# Ogłoszenia, które nigdy nie są okazją (01.11): kupno / szukanie / sama zamiana i samo akcesorium w tytule.
+_WANTED = re.compile(r"^\W*(?:kupi[eę]|szukam|skupuj\w*|cump[aă]r|keres\w*|koupím|koupim|hľadám|hladam|buying|wtb)\b",
+                     re.I)
+_SWAP = re.compile(r"^\W*(?:zamieni[eę]|wymieni[eę]|vymen\w*|vyměn\w*|výměna|vymena|schimb\w*|csere\w*|swap)\b", re.I)
+_SELL = re.compile(r"\b(?:sprzeda\w*|predam|prodám|prodam|vând|vand|eladó|elado|sell\w*|sale)\b", re.I)
+_ACCESSORY = re.compile(r"^\W*(?:etui|case|pokrowiec|szk[lł]o|folia|plecki|pude[lł]ko|karton|[lł]adowark\w*|zasilacz|"
+                        r"kabel|obudowa|pad|gamepad|kontroler|controller|joy-?con\w*|uchwyt|torba|podstawka|"
+                        r"skin|naklejk\w*)\b", re.I)
+_DEVICE = re.compile(r"\b(?:konsol\w*|console|consol\w*|konzol\w*|zestaw|bundle|telefon|smartfon|tablet|laptop|"
+                     r"\+\s*(?:konsola|ps[345]|xbox|switch))\b|\+", re.I)
+
+
+def junk_reason(offer):
+    """Powód pominięcia ogłoszenia, które nie jest sprzedażą urządzenia, albo None."""
+    title = offer.title or ""
+    if _WANTED.search(title):
+        return "ogłoszenie kupna / szukania"
+    if _SWAP.search(title) and not _SELL.search(title):
+        return "tylko zamiana"
+    if _ACCESSORY.search(title) and not _DEVICE.search(title):
+        return "samo akcesorium (tytuł)"
+    return None
+
+
 def prefilter(offer, cfg: AiConfig):
     """Powód odrzucenia przed AI albo None (oferta idzie do oceny). Czysta funkcja, zero kosztów.
     Słowa i ceny według kategorii oferty (AiConfig.filters_for)."""
+    if getattr(cfg, "skip_junk", False):
+        reason = junk_reason(offer)
+        if reason:
+            return reason
     keywords, exclude, price_min, price_max = cfg.filters_for(getattr(offer, "category", None))
     price = _offer_price(offer)
     if price is not None:
@@ -439,6 +467,31 @@ def cap_without_market_data(evaluation, offer, guides, cap, comps=None):
     evaluation.setdefault("red_flags", []).append(
         f"Program: brak tego modelu w danych rynku - cena sprzedaży {evaluation.get('market_value_pln') or '?'} zł to "
         f"szacunek AI, ocena najwyżej {cap:g}")
+    return evaluation
+
+
+# Wersje, których nie ma w sprzedaży (01.11: Steam Deck OLED 256 GB dostał 8-9/10 od 5 tańszych modeli) - błąd
+# sprzedawcy albo podróbka, prawdziwa wersja zwykle tańsza → ocena najwyżej 7 i flaga do ręcznego sprawdzenia.
+IMPOSSIBLE = (
+    (re.compile(r"steam\s*deck.{0,25}\boled\b.{0,30}\b(?:64|256)\s*gb|steam\s*deck.{0,25}\b(?:64|256)\s*gb.{0,30}"
+                r"\boled\b", re.I), "Steam Deck OLED jest tylko 512 GB / 1 TB (64 / 256 GB to wersja LCD)"),
+    (re.compile(r"iphone\s*1[3-6](?!\s*(?:pro|plus|max|mini|e\b)).{0,15}\b64\s*gb", re.I),
+     "iPhone 13-16 nie ma wersji 64 GB (najmniej 128 GB)"),
+    (re.compile(r"iphone\s*1[56]\s*pro\s*max.{0,15}\b128\s*gb", re.I),
+     "iPhone 15 / 16 Pro Max nie ma wersji 128 GB (najmniej 256 GB)"),
+)
+
+
+def cap_impossible_variant(evaluation, offer, cap=7.0):
+    """Tytuł podaje wersję, która nie istnieje → najwyżej `cap` + czerwona flaga (AI potrafi to przeoczyć)."""
+    title = offer.title or ""
+    for pattern, message in IMPOSSIBLE:
+        if pattern.search(title):
+            if evaluation["score"] > cap:
+                evaluation.setdefault("score_ai", evaluation["score"])
+                evaluation["score"] = float(cap)
+            evaluation.setdefault("red_flags", []).append(f"Program: {message} - sprawdź, co naprawdę jest w ofercie")
+            break
     return evaluation
 
 
@@ -1365,6 +1418,7 @@ class OfferEvaluator:
                                     comps)
             apply_pl_bonus(evaluation, offer, getattr(self.cfg, "pl_bonus", 0))
         cap_without_shipping(evaluation, offer)
+        cap_impossible_variant(evaluation, offer)
         route = self.route(offer)
         evaluation["table_rows"] = len(route.rows) + sum(len(r) for _c, r in route.extra or ())
         log.info("[AI] %s | %s/10%s | %s | zysk ~%s zł%s | zdjęcia: wysłane %d, AI widzi %d | etap %s | %s", offer.id,
