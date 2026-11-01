@@ -358,3 +358,22 @@ def test_lane_backoff_grows_and_alerts_once(monkeypatch):
     assert [m["title"] for m in sent] == ["Sniper: proxy glowne nie działa", "Sniper: proxy glowne znów działa",
                                           "Sniper: proxy glowne nie działa"]
     assert "407" in sent[2]["message"] and lane.failures == 5
+
+
+def test_stale_price_range_stops_fast_scans():
+    """Nowy zakres cen z catalogs.json → przyspieszony wpis starego zakresu znika (log 01.11: tablety 300-3900
+    skanowane co 3 s obok nowego 300-4100)."""
+    async def scenario():
+        cfg = ScoutConfig(category="3580", catalogs="3728:300-4100", price_floor=0, poll_interval=15, poll_min=3)
+        session = VintedSession()
+        scout = Scout(cfg, session, EmailNotifier(SmtpConfig()))
+        lane = scout.lanes[MAIN_PROXY]
+        new = scout.active_specs()[0]
+        old = CatalogSpec(3728, "300", "3900")
+        lane.fast = {(3728, "300", "3900"): {"spec": old, "period": 3, "normal": 15, "since": time.monotonic()}}
+        scout._speed_up(lane, new)
+        scout._relax(lane, time.monotonic())
+        await session.close()
+        return list(lane.fast)
+
+    assert asyncio.run(scenario()) == [(3728, "300", "4100")]

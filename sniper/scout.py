@@ -217,6 +217,13 @@ class Scout:
     def _relax(self, lane, now):
         """Po SNIPER_FAST_MINUTES bez przepełnienia katalog zwalnia o krok, aż do zwykłego tempa."""
         minutes, step = getattr(self.cfg, "fast_minutes", 10.0), getattr(self.cfg, "poll_step", 3.0)
+        if lane.fast:
+            # Nowe zakresy cen w catalogs.json (automat) = nowy klucz katalogu; stary przyspieszony wpis skanowałby
+            # dalej nieaktualny zakres co SNIPER_POLL_MIN s (log 01.11: tablety 300-3900 obok 300-4100) - usuwamy.
+            current = {spec_key(s) for s in self.active_specs() if self.lane_for(s) is lane}
+            for key in [k for k in lane.fast if k not in current]:
+                log.info("[SCOUT] %s: %s już nieaktualny (nowe zakresy cen) - koniec przyspieszonych skanów.",
+                         lane.label, lane.fast.pop(key)["spec"].label)
         for key, boost in list(lane.fast.items()):
             if now - boost["since"] < minutes * 60:
                 continue
