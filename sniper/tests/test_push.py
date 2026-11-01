@@ -77,6 +77,9 @@ def test_evaluator_pushes_deal_even_when_mail_suppressed(tmp_path):
         def notify_deal(self, record):
             self.records.append(record)
 
+        def wants_question(self, record):
+            return False
+
     ev = OfferEvaluator(ai_cfg(tmp_path), FakeNotifier(), log_dir=tmp_path)
     ev.push = FakePush()
     from sniper.notifier import sample_offer
@@ -86,3 +89,51 @@ def test_evaluator_pushes_deal_even_when_mail_suppressed(tmp_path):
     ev._finish(offer, good)
     ev._finish(offer, weak)
     assert ev.push.records == [good] and good.get("pushed") is True
+
+
+QUESTION = dict(EVAL, score=6, is_deal=False, laptop_model="iPad 10 64 GB (Wi-Fi?)",
+                market_value_pln=950, seller_question="Dzień dobry, czy to wersja Wi-Fi, czy z kartą SIM (5G)?",
+                buy_if_answer="jeśli 5G - kupuj, zysk ~350 zł")
+
+
+def test_question_message_low_priority_with_ready_text():
+    msg = pu.build_question_message(OFFER, QUESTION, "sniper-a8f3kq", priority=3)
+    assert msg["priority"] == 3 and msg["title"].startswith("Zapytaj sprzedawcę: ")
+    assert "Wyślij: Dzień dobry, czy to wersja Wi-Fi" in msg["message"]
+    assert "Kupuj, jeśli: jeśli 5G - kupuj" in msg["message"]
+    assert "gorszego wariantu: 6/10" in msg["message"] and msg["click"] == OFFER["url"]
+
+
+def test_wants_question_only_with_question_and_min_score():
+    p = pu.PushNotifier(cfg(ask_min_score=5, ask_priority=3))
+    assert p.wants_question({"status": "oceniona", "evaluation": QUESTION})
+    assert not p.wants_question({"status": "oceniona", "evaluation": dict(QUESTION, seller_question="")})
+    assert not p.wants_question({"status": "oceniona", "evaluation": dict(QUESTION, score=3)})
+    assert not p.wants_question({"status": "odfiltrowana", "evaluation": None})
+
+
+def test_deal_message_shows_question_when_present():
+    msg = pu.build_deal_message(OFFER, dict(QUESTION, score=9), "t")
+    assert "Najpierw zapytaj: Dzień dobry" in msg["message"] and "Kupuj, jeśli:" in msg["message"]
+
+
+def test_evaluator_pushes_question_when_not_deal(tmp_path):
+    from sniper.evaluator import OfferEvaluator
+    from sniper.notifier import sample_offer
+    from sniper.tests.test_evaluator import FakeNotifier, ai_cfg
+
+    sent = []
+    ev = OfferEvaluator(ai_cfg(tmp_path), FakeNotifier(), log_dir=tmp_path)
+    ev.push = pu.PushNotifier(cfg(ask_min_score=5, ask_priority=3))
+    ev.push.notify_deal = lambda record: sent.append(("deal", record))
+    ev.push.notify_question = lambda record: sent.append(("question", record))
+    offer = sample_offer()
+    asked = ev._record(offer, "oceniona", evaluation=QUESTION)
+    ev._finish(offer, asked)
+    assert [kind for kind, _ in sent] == ["question"] and asked.get("pushed_question") is True
+
+
+def test_normalize_keeps_seller_question():
+    from sniper.evaluator import normalize_evaluation
+    ev = normalize_evaluation(json.dumps({"score": 6, "seller_question": " Czy 5G? ", "buy_if_answer": None}))
+    assert ev["seller_question"] == "Czy 5G?" and ev["buy_if_answer"] == ""

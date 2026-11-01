@@ -50,6 +50,10 @@ def build_deal_message(offer, evaluation, topic, priority=5, attach_photo=True):
     parts = [p for p in (ev.get("gpu_model"), ev.get("laptop_model")) if p]
     if parts:
         lines.append(" / ".join(parts))
+    if ev.get("seller_question"):
+        lines.append(f"Najpierw zapytaj: {ev['seller_question']}")
+        if ev.get("buy_if_answer"):
+            lines.append(f"Kupuj, jeśli: {ev['buy_if_answer']}")
     if ev.get("reasoning"):
         lines.append(str(ev["reasoning"])[:300])
     msg = {
@@ -59,6 +63,33 @@ def build_deal_message(offer, evaluation, topic, priority=5, attach_photo=True):
         "priority": int(priority),
         "tags": ["moneybag"],
     }
+    url = offer.get("url")
+    if url:
+        msg["click"] = url
+        msg["actions"] = [{"action": "view", "label": "Otwórz ofertę", "url": url, "clear": True}]
+    photos = offer.get("photo_urls") or []
+    if attach_photo and photos:
+        msg["attach"] = photos[0]
+        msg["filename"] = "oferta.jpg"
+    return msg
+
+
+def build_question_message(offer, evaluation, topic, priority=3, attach_photo=True):
+    """„Zapytaj sprzedawcę”: AI nie ustaliła parametru zmieniającego cenę - gotowa wiadomość i warunek zakupu."""
+    ev = evaluation or {}
+    category = CATEGORY_NAMES.get(offer.get("category"))
+    title = "Zapytaj sprzedawcę" + (f" ({category}): " if category else ": ") + (offer.get("title") or "?")
+    lines = [f"{_pln(purchase_cost(offer))} z wysyłką i opłatą Vinted (cena {_pln(offer.get('price'))})",
+             f"Wyślij: {ev.get('seller_question') or '?'}"]
+    if ev.get("buy_if_answer"):
+        lines.append(f"Kupuj, jeśli: {ev['buy_if_answer']}")
+    score = ev.get("score")
+    if isinstance(score, (int, float)):
+        lines.append(f"Ocena dla gorszego wariantu: {score:g}/10, sprzedam za ~{_pln(ev.get('market_value_pln'))}")
+    if ev.get("laptop_model"):
+        lines.append(str(ev["laptop_model"]))
+    msg = {"topic": topic, "title": title[:120], "message": "\n".join(lines), "priority": int(priority),
+           "tags": ["question"]}
     url = offer.get("url")
     if url:
         msg["click"] = url
@@ -87,11 +118,26 @@ class PushNotifier:
         score = ev.get("score")
         return record.get("status") == "oceniona" and isinstance(score, (int, float)) and score >= self.cfg.min_score
 
+    def wants_question(self, record):
+        """Okazja zależna od odpowiedzi sprzedawcy: jest pytanie, a ocena gorszego wariantu ≥ ask_min_score."""
+        ev = (record or {}).get("evaluation") or {}
+        score = ev.get("score")
+        return (record.get("status") == "oceniona" and bool(ev.get("seller_question"))
+                and isinstance(score, (int, float)) and score >= getattr(self.cfg, "ask_min_score", 5.0))
+
     def notify_deal(self, record):
         """Planuje wysyłkę (w tle) i od razu wraca."""
         msg = build_deal_message(record.get("offer") or {}, record.get("evaluation"), self.cfg.topic,
                                  self.cfg.priority, self.cfg.attach_photo)
-        task = asyncio.create_task(self.send(msg), name="push-deal")
+        self._schedule(msg, "push-deal")
+
+    def notify_question(self, record):
+        msg = build_question_message(record.get("offer") or {}, record.get("evaluation"), self.cfg.topic,
+                                     getattr(self.cfg, "ask_priority", 3), self.cfg.attach_photo)
+        self._schedule(msg, "push-question")
+
+    def _schedule(self, msg, name):
+        task = asyncio.create_task(self.send(msg), name=name)
         self._tasks.add(task)
         task.add_done_callback(self._tasks.discard)
 

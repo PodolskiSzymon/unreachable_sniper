@@ -75,10 +75,15 @@ EVALUATION_SCHEMA = {
                         "naklejki, ekran, uszkodzenia); pusty tekst, gdy nie widzisz zdjęć."},
         "reasoning": {"type": "string", "description": "2-4 zdania uzasadnienia po polsku."},
         "red_flags": {"type": "array", "items": {"type": "string"}, "description": "Czerwone flagi (pusta lista = brak)."},
+        "seller_question": {"type": "string", "description": "Gdy cena zależy od parametru, którego nie da się "
+                            "ustalić z ogłoszenia (np. Wi-Fi czy 5G, pamięć, RAM, model, blokada): krótka, uprzejma "
+                            "wiadomość do sprzedawcy po polsku, gotowa do wysłania; pusty tekst, gdy nie trzeba pytać."},
+        "buy_if_answer": {"type": "string", "description": "Przy seller_question: jaka odpowiedź oznacza „kupuj” "
+                          "i ile wtedy zysku (np. 'jeśli 256 GB - kupuj, zysk ~400 zł'); pusty tekst, gdy nie pytasz."},
     },
     "required": ["is_deal", "score", "gpu_model", "laptop_model", "market_value_pln", "max_buy_price_pln",
                  "potential_profit_pln", "margin_pct", "sell_days_estimate", "meets_profit_rule", "test_needs", "photos_seen",
-                 "photo_notes", "reasoning", "red_flags"],
+                 "photo_notes", "reasoning", "red_flags", "seller_question", "buy_if_answer"],
     "additionalProperties": False,
 }
 
@@ -93,6 +98,16 @@ telefon / tablet: model i pamięć; konsola: wersja; podzespół: układ, pojemn
 (naklejki, zrzuty z ustawień / menedżera urządzeń / BIOS). Dopasuj ofertę do wiersza tabeli wytycznych; \
 <karta_rynku> podaje wiersze dopasowane automatycznie po tytule (wskazówka - sprawdź, czy naprawdę pasują). \
 Gdy nie da się ustalić modelu albo brak pasującego wiersza, napisz to i oceń ostrożnie.
+1a. Dokładna konfiguracja: parametry, które zmieniają cenę, wyprowadzaj z tego, co pewne - RAM z procesora / \
+układu (np. iPad 10 = A14 = 4 GB, iPad Air 5 = M1 = 8 GB), łączność z numeru modelu i wyglądu (tablet: Wi-Fi czy \
+Cellular / 5G - szuflada na SIM, pasek anteny, numer modelu; telefon: wersja 5G), pamięć z ustawień / naklejek / \
+pudełka. Nie myl modeli o tym samym ekranie i roku (np. iPad 10 vs iPad Air 5 - oba 10,9" 2022) ani wariantów \
+Air / Pro / mini / Plus / Ultra / FE / Lite: wiersz tabeli musi pasować do DOKŁADNEGO modelu - gdy wiersz może \
+mieszać różne modele lub warianty, licz od taniej wersji i napisz to w reasoning. Laptop: układ klawiatury \
+(nordycka / niemiecka / francuska = niższa cena w Polsce). Gdy parametru zmieniającego cenę nie da się ustalić: \
+licz market_value_pln dla GORSZEGO możliwego wariantu, a w seller_question wpisz krótką wiadomość do sprzedawcy, \
+która to rozstrzygnie (np. „Dzień dobry, czy to wersja Wi-Fi, czy z kartą SIM (5G)? Ile ma pamięci?”), \
+a w buy_if_answer - jaka odpowiedź oznacza „kupuj” i ile wtedy zysku. Gdy nic nie trzeba ustalać, oba pola puste.
 2. Cena zakupu = KOSZT ZAKUPU z oferty (cena + wysyłka + opłata Vinted dla kupującego) - wszędzie niżej „cena \
 łączna” oznacza właśnie ten koszt. market_value_pln = realna cena sprzedaży tej konkretnej sztuki \
 w ≤ 7 dni według wytycznych (mocniejsza konfiguracja / komplet / gwarancja → wyżej, słabsza / drobna usterka → niżej).
@@ -299,6 +314,8 @@ def normalize_evaluation(text):
         "photo_notes": str(data.get("photo_notes") or ""),
         "reasoning": str(data.get("reasoning") or ""),
         "red_flags": [str(f) for f in flags] if isinstance(flags, list) else [str(flags)],
+        "seller_question": str(data.get("seller_question") or "").strip(),
+        "buy_if_answer": str(data.get("buy_if_answer") or "").strip(),
     }
 
 
@@ -998,6 +1015,9 @@ class OfferEvaluator:
                 if push.wants(record):
                     record["pushed"] = True
                     push.notify_deal(record)
+                elif push.wants_question(record):
+                    record["pushed_question"] = True
+                    push.notify_question(record)
             except Exception:
                 log.exception("[PUSH] Błąd przygotowania powiadomienia")
         if self.buyer is not None and self.buyer.wants(record):

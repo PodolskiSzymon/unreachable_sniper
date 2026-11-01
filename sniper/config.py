@@ -417,6 +417,10 @@ class NtfyConfig:
     min_score: float = _env_float("SNIPER_NTFY_MIN_SCORE", _env_float("SNIPER_AI_MIN_SCORE", 8.0))
     priority: int = _env_int("SNIPER_NTFY_PRIORITY", 5)          # 5 = max: osobny kanał = własny dźwięk w Androidzie
     attach_photo: bool = _env_bool("SNIPER_NTFY_PHOTO", True)    # pierwsze zdjęcie oferty w powiadomieniu
+    # „Zapytaj sprzedawcę”: AI nie ustaliła parametru zmieniającego cenę (Wi-Fi/5G, pamięć, RAM...) - osobne
+    # powiadomienie z gotową wiadomością, od tej oceny (liczonej dla gorszego wariantu) i z niższym priorytetem.
+    ask_min_score: float = _env_float("SNIPER_NTFY_ASK_MIN_SCORE", 5.0)
+    ask_priority: int = _env_int("SNIPER_NTFY_ASK_PRIORITY", 3)  # 3 = domyślny kanał (zwykły dźwięk)
 
 
 @dataclass(frozen=True)
