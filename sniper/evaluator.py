@@ -103,8 +103,8 @@ układu (np. iPad 10 = A14 = 4 GB, iPad Air 5 = M1 = 8 GB), łączność z numer
 Cellular / 5G - szuflada na SIM, pasek anteny, numer modelu; telefon: wersja 5G), pamięć z ustawień / naklejek / \
 pudełka. Nie myl modeli o tym samym ekranie i roku (np. iPad 10 vs iPad Air 5 - oba 10,9" 2022) ani wariantów \
 Air / Pro / mini / Plus / Ultra / FE / Lite: wiersz tabeli musi pasować do DOKŁADNEGO modelu - gdy wiersz może \
-mieszać różne modele lub warianty, licz od taniej wersji i napisz to w reasoning. Laptop: układ klawiatury \
-(nordycka / niemiecka / francuska = niższa cena w Polsce). Gdy parametru zmieniającego cenę nie da się ustalić: \
+mieszać różne modele lub warianty, licz od taniej wersji i napisz to w reasoning. \
+Gdy parametru zmieniającego cenę nie da się ustalić: \
 licz market_value_pln dla GORSZEGO możliwego wariantu, a w seller_question wpisz krótką wiadomość do sprzedawcy, \
 która to rozstrzygnie (np. „Dzień dobry, czy to wersja Wi-Fi, czy z kartą SIM (5G)? Ile ma pamięci?”), \
 a w buy_if_answer - jaka odpowiedź oznacza „kupuj” i ile wtedy zysku. Gdy nic nie trzeba ustalać, oba pola puste.
