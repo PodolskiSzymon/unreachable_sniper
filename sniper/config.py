@@ -470,6 +470,16 @@ MODEL_PRICES = {
     # Claude Haiku 5.5 (od 2026-10-15): do 100 tys. tokenów w zapytaniu (oceny Snipera ~10 tys.); dłuższe 0,50 / 2,50.
     "claude-haiku-5-5": (0.10, 0.50),
     "claude-haiku-4-5": (1.0, 5.0),
+    # OpenRouter (01.11, cennik z openrouter.ai/models; OpenRouter i tak podaje koszt każdego zapytania)
+    "mistralai/mistral-small-2603": (0.15, 0.6),
+    "qwen/qwen3-vl-30b-a3b-instruct": (0.15, 0.6),
+    "openai/gpt-4o-mini": (0.15, 0.6),
+    "mistralai/ministral-14b-2512": (0.2, 0.2),
+    "meta-llama/llama-4-maverick": (0.1875, 0.6525),
+    "google/gemini-3.5-flash-lite": (0.3, 2.5),
+    "deepseek/deepseek-v4-flash-vision-exp": (0.2156, 0.6468),
+    "qwen/qwen3-vl-235b-a22b-instruct": (0.2, 0.88),
+    "qwen/qwen3.6-flash": (0.1875, 1.125),
     "claude-fable-5-1": (10.0, 50.0),
 }
 

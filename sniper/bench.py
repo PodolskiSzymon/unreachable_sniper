@@ -57,6 +57,25 @@ VARIANTS = {
                     "Claude Haiku 5.5, jedna ocena z krótkim myśleniem (najtaniej)"),
     "haiku55_szybka": ({"quick_provider": "anthropic", "quick_model": "claude-haiku-5-5"},
                        "szybki etap na Claude Haiku 5.5, pełna ocena okazji na głównym modelu (Gemini)"),
+    # 01.11 - tanie modele ze zdjęciami z OpenRouter (lista użytkownika), jedna ocena na ofertę
+    "or_mistral_s4": ({"provider": "openrouter", "model": "mistralai/mistral-small-2603", "two_stage": False},
+                 "Mistral Small 4 - $0.15 / $0.6 za 1 mln tokenów (OpenRouter, OPENROUTER_API_KEY)"),
+    "or_qwen_vl30": ({"provider": "openrouter", "model": "qwen/qwen3-vl-30b-a3b-instruct", "two_stage": False},
+                 "Qwen3 VL 30B A3B Instruct - $0.15 / $0.6 za 1 mln tokenów (OpenRouter, OPENROUTER_API_KEY)"),
+    "or_gpt4o_mini": ({"provider": "openrouter", "model": "openai/gpt-4o-mini", "two_stage": False},
+                 "OpenAI GPT-4o-mini - $0.15 / $0.6 za 1 mln tokenów (OpenRouter, OPENROUTER_API_KEY)"),
+    "or_ministral14": ({"provider": "openrouter", "model": "mistralai/ministral-14b-2512", "two_stage": False},
+                 "Mistral Ministral 3 14B - $0.2 / $0.2 za 1 mln tokenów (OpenRouter, OPENROUTER_API_KEY)"),
+    "or_maverick": ({"provider": "openrouter", "model": "meta-llama/llama-4-maverick", "two_stage": False},
+                 "Meta Llama 4 Maverick - $0.1875 / $0.6525 za 1 mln tokenów (OpenRouter, OPENROUTER_API_KEY)"),
+    "or_lite35": ({"provider": "openrouter", "model": "google/gemini-3.5-flash-lite", "two_stage": False},
+                 "Gemini 3.5 Flash Lite (przez OpenRouter) - $0.3 / $2.5 za 1 mln tokenów (OpenRouter, OPENROUTER_API_KEY)"),
+    "or_deepseek_v": ({"provider": "openrouter", "model": "deepseek/deepseek-v4-flash-vision-exp", "two_stage": False},
+                 "DeepSeek V4 Flash Vision (eksperym.) - $0.2156 / $0.6468 za 1 mln tokenów (OpenRouter, OPENROUTER_API_KEY)"),
+    "or_qwen_vl235": ({"provider": "openrouter", "model": "qwen/qwen3-vl-235b-a22b-instruct", "two_stage": False},
+                 "Qwen3 VL 235B A22B Instruct - $0.2 / $0.88 za 1 mln tokenów (OpenRouter, OPENROUTER_API_KEY)"),
+    "or_qwen36_flash": ({"provider": "openrouter", "model": "qwen/qwen3.6-flash", "two_stage": False},
+                 "Qwen3.6 Flash - $0.1875 / $1.125 za 1 mln tokenów (OpenRouter, OPENROUTER_API_KEY)"),
 }
 # Dzień testowy 28.10 (użytkownik): tryby mediany / model / basal × Gemini 3.8 Flash / 2.5 Flash Lite × 3 / 6 zdjęć,
 # myślenie medium → 12 wariantów na tych samych ofertach.
@@ -84,7 +103,8 @@ for _name, _over, _text in (
 SETS = {"dzien_testowy": ",".join(f"{m}_{k}_z{p}" for m in TEST_MODES for k in TEST_MODELS for p in (3, 6)),
         "dzien_testowy2": "d2_38,d2_38_mysl_low,d2_38_krotkie,d2_35l,d2_35l_krotkie,d2_31l",
         "koszty": "przed_31_10,obecny,jeden_etap,cala_tabela",
-        "modele": "haiku55,haiku55_low,haiku55_szybka,obecny"}
+        "modele": "haiku55,haiku55_low,haiku55_szybka,obecny",
+        "openrouter": "or_mistral_s4,or_qwen_vl30,or_gpt4o_mini,or_ministral14,or_maverick,or_lite35,or_deepseek_v,or_qwen_vl235,or_qwen36_flash"}
 DEFAULT_VARIANTS = "obecny,mediany,zdjecia3,srednia_rozdz,niska_rozdz,mysl_niska,lite_mediany,kaskada"
 GOLDEN_FILE = Path(__file__).with_name("bench_golden.json")
 

@@ -308,3 +308,14 @@ def test_bench_compares_with_saved_evaluations(tmp_path):
     line = next(x for x in lines if x.startswith("haiku55"))
     assert line.split("|")[-1].split() == ["100%", "100%", "100%"]   # ta sama decyzja, ±1 pkt, cena ±15%
     assert set(resolve_variants("modele")) == {"haiku55", "haiku55_low", "haiku55_szybka", "obecny"}
+
+
+def test_openrouter_set_uses_openrouter_key(monkeypatch, tmp_path):
+    from sniper.bench import Bench, resolve_variants
+    monkeypatch.setenv("OPENROUTER_API_KEY", "klucz-or")
+    variants = resolve_variants("openrouter")
+    assert len(variants) == 9 and all(v[1]["provider"] == "openrouter" for v in variants.values())
+    bench = Bench(ai_cfg(tmp_path), {"or_qwen_vl30": variants["or_qwen_vl30"]})
+    ev = bench.evaluators["or_qwen_vl30"][1]
+    assert (ev.cfg.api_key, ev.cfg.model, ev.cfg.two_stage) == ("klucz-or", "qwen/qwen3-vl-30b-a3b-instruct", False)
+    assert ev._price_in == 0.15
