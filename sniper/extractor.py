@@ -53,6 +53,9 @@ class Offer:
     # Nasza kategoria (laptop, phone, tablet, console, gpu, ram, storage) - wybór wytycznych; None = guidelines.md.
     category: str | None = None
     detected_at: str = field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
+    # Pola formularza Vinted {kod: wartość} (computer_ram, computer_storage_capacity, computer_cpu_line…) - specyfikacja
+    # laptopa (sniper/specs.py) jak w analizatorze.
+    attributes: dict = field(default_factory=dict)
 
     def to_dict(self):
         """Słownik gotowy do serializacji i wysyłki do modelu AI."""
@@ -217,6 +220,16 @@ def _attribute(sidebar, code):
     return None
 
 
+def extract_attributes(sidebar):
+    """{kod: wartość} ze wszystkich pól formularza (plugin attributes) - jak analizator (details.attributes_json)."""
+    out = {}
+    for attr in get_plugin(sidebar, "attributes").get("attributes") or []:
+        value = (attr.get("data") or {}).get("value")
+        if attr.get("code") and value not in (None, ""):
+            out[str(attr["code"])] = str(value)
+    return out
+
+
 def build_offer(item_id, sidebar, shipping_payload=None, catalog_item=None, user_profile=None):
     """Skleja Offer z odpowiedzi sidebar + shipping_details (+ opcjonalnie pozycji katalogu i profilu)."""
     catalog_item = catalog_item or {}
@@ -247,6 +260,7 @@ def build_offer(item_id, sidebar, shipping_payload=None, catalog_item=None, user
         total_price=total,
         brand=brand,
         condition=_attribute(sidebar, "status") or catalog_item.get("status"),
+        attributes=extract_attributes(sidebar),
     )
 
 

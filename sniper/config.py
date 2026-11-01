@@ -309,6 +309,15 @@ def _ai_api_key(provider):
     return _env("SNIPER_AI_API_KEY") or specific
 
 
+def provider_api_key(provider, main_provider=None):
+    """Klucz dla dostawcy INNEGO niż główny (szybki etap, warianty sniper.bench): tylko jego własny klucz
+    (GEMINI_API_KEY / ANTHROPIC_API_KEY / OPENROUTER_API_KEY) - SNIPER_AI_API_KEY należy do głównego dostawcy."""
+    if provider == (main_provider or _AI_PROVIDER):
+        return _ai_api_key(provider)
+    return {"gemini": _env("GEMINI_API_KEY") or _env("GOOGLE_API_KEY"), "anthropic": _env("ANTHROPIC_API_KEY"),
+            "openrouter": _env("OPENROUTER_API_KEY")}.get(provider, "")
+
+
 # openrouter: jeden klucz, setki modeli różnych firm (openrouter.ai/models, filtr „image input”); model podajesz
 # w SNIPER_AI_MODEL w formacie z ich strony, np. qwen/…, z-ai/…, mistralai/…, google/gemma-…
 AI_DEFAULT_MODELS = {"gemini": "gemini-3.8-flash", "anthropic": "claude-opus-5-5", "openrouter": ""}
@@ -354,6 +363,11 @@ class AiConfig:
     quick_effort: str = _env("SNIPER_AI_QUICK_EFFORT", "low").lower()
     quick_media_resolution: str = _env("SNIPER_AI_QUICK_MEDIA_RESOLUTION", "medium").lower()
     confirm_from: float = _env_float("SNIPER_AI_CONFIRM_FROM", 6.0)
+    # Szybki etap na innym (tańszym) modelu / u innego dostawcy (2026-11-01), np. SNIPER_AI_QUICK_PROVIDER=anthropic +
+    # SNIPER_AI_QUICK_MODEL=claude-haiku-5-5 (klucz ANTHROPIC_API_KEY) - pełna ocena okazji zostaje na głównym modelu.
+    # Puste = ten sam model co pełna ocena.
+    quick_model: str = _env("SNIPER_AI_QUICK_MODEL")
+    quick_provider: str = _env("SNIPER_AI_QUICK_PROVIDER").lower()
     # Bez AI, gdy wynik i tak nie dałby maila ani ntfy (31.10): tryb mediany bez żadnej mediany z bazy (program
     # przycina wtedy ocenę do 3) albo brak danych przy SNIPER_AI_NO_DATA_MAX_SCORE poniżej progu powiadomień.
     skip_no_data: bool = _env_bool("SNIPER_AI_SKIP_NO_DATA", True)
@@ -453,6 +467,8 @@ MODEL_PRICES = {
     "gemini-2.5-flash-lite": (0.10, 0.40),
     "claude-opus-5-5": (4.0, 20.0),
     "claude-sonnet-5-5": (2.0, 10.0),
+    # Claude Haiku 5.5 (od 2026-10-15): do 100 tys. tokenów w zapytaniu (oceny Snipera ~10 tys.); dłuższe 0,50 / 2,50.
+    "claude-haiku-5-5": (0.10, 0.50),
     "claude-haiku-4-5": (1.0, 5.0),
     "claude-fable-5-1": (10.0, 50.0),
 }

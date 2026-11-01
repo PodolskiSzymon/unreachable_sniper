@@ -50,6 +50,13 @@ VARIANTS = {
     "cala_tabela": ({"guide_rows": "wszystkie"}, "cała tabela kategorii (najwyżej 80 wierszy) zamiast wierszy rodziny"),
     "przed_31_10": ({"two_stage": False, "guide_rows": "wszystkie", "skip_no_data": False},
                     "jak przed 31.10: jedna pełna ocena, cała tabela, AI także bez danych rynku"),
+    # 01.11 - tańsi dostawcy (klucz ANTHROPIC_API_KEY w sniper/.env; porównanie bez Gemini: --ref zapisane)
+    "haiku55": ({"provider": "anthropic", "model": "claude-haiku-5-5", "effort": "medium"},
+                "Claude Haiku 5.5 ($0,10 / $0,50 za 1 mln tokenów) - cała ocena, dwa etapy"),
+    "haiku55_low": ({"provider": "anthropic", "model": "claude-haiku-5-5", "effort": "low", "two_stage": False},
+                    "Claude Haiku 5.5, jedna ocena z krótkim myśleniem (najtaniej)"),
+    "haiku55_szybka": ({"quick_provider": "anthropic", "quick_model": "claude-haiku-5-5"},
+                       "szybki etap na Claude Haiku 5.5, pełna ocena okazji na głównym modelu (Gemini)"),
 }
 # Dzień testowy 28.10 (użytkownik): tryby mediany / model / basal × Gemini 3.8 Flash / 2.5 Flash Lite × 3 / 6 zdjęć,
 # myślenie medium → 12 wariantów na tych samych ofertach.
@@ -76,7 +83,8 @@ for _name, _over, _text in (
                         **_over}, f"mediany, 6 zdjęć: {_text}")
 SETS = {"dzien_testowy": ",".join(f"{m}_{k}_z{p}" for m in TEST_MODES for k in TEST_MODELS for p in (3, 6)),
         "dzien_testowy2": "d2_38,d2_38_mysl_low,d2_38_krotkie,d2_35l,d2_35l_krotkie,d2_31l",
-        "koszty": "przed_31_10,obecny,jeden_etap,cala_tabela"}
+        "koszty": "przed_31_10,obecny,jeden_etap,cala_tabela",
+        "modele": "haiku55,haiku55_low,haiku55_szybka,obecny"}
 DEFAULT_VARIANTS = "obecny,mediany,zdjecia3,srednia_rozdz,niska_rozdz,mysl_niska,lite_mediany,kaskada"
 GOLDEN_FILE = Path(__file__).with_name("bench_golden.json")
 
@@ -185,9 +193,14 @@ class Bench:
         self.variants = variants
         self.basal_client = basal_client
         self.evaluators = {}
+        from .config import provider_api_key
         for name, (mode, over, stage1) in variants.items():
             cfg = replace(base, max_concurrent=concurrency, **over)
-            ev = OfferEvaluator(cfg, notifier=None, log_dir=None, client=client)
+            if cfg.provider != base.provider:          # wariant u innego dostawcy - jego własny klucz i ceny
+                cfg = replace(cfg, api_key=over.get("api_key") or provider_api_key(cfg.provider, base.provider),
+                              price_in=None, price_out=None)
+            ev = OfferEvaluator(cfg, notifier=None, log_dir=None,
+                                client=client if cfg.provider == base.provider else None)
             first = None
             if mode == "kaskada":
                 first = OfferEvaluator(replace(cfg, model=stage1, max_photos=0), notifier=None, log_dir=None,
@@ -286,10 +299,20 @@ def _is_deal(row):
     return bool(row and row["evaluation"] and row["evaluation"].get("is_deal"))
 
 
+SAVED = "zapisane"          # odniesienie: oceny z logs/evaluations.jsonl (bez nowych wywołań AI)
+
+
+def saved_rows(offers):
+    """Zapisane oceny Snipera jako wiersze wariantu „zapisane” (--ref zapisane - porównanie bez płacenia za model
+    odniesienia, np. gdy skończyły się kredyty Gemini)."""
+    return [{"variant": SAVED, "id": o.id, "evaluation": old, "cost": 0.0, "seconds": 0.0, "usage": {},
+             "error": None, "stage2": True} for o, old in offers if old]
+
+
 def summary(rows, skipped, offers, golden, ref, variants):
     """Linie tabeli: koszt, okazje, złoty zbiór, zgodność z odniesieniem + lista spornych okazji."""
     by = {}
-    for row in rows:
+    for row in rows + (saved_rows(offers) if ref == SAVED else []):
         by.setdefault(row["variant"], {})[row["id"]] = row
     ids = [o.id for o, _old in offers]
     titles = {o.id: (o.title or "", _offer_price(o)) for o, _old in offers}
@@ -402,7 +425,8 @@ async def _cli(argv=None):
     parser = argparse.ArgumentParser(description="Porównanie wariantów oceny AI: jakość i koszt.")
     parser.add_argument("--warianty", default=DEFAULT_VARIANTS)
     parser.add_argument("--wlasny", action="append", default=[], help='np. "moj:model=x,max_photos=4,tryb=mediany"')
-    parser.add_argument("--ref", default=None, help="wariant odniesienia (domyślnie pierwszy)")
+    parser.add_argument("--ref", default=None, help="wariant odniesienia (domyślnie pierwszy); „zapisane” = oceny "
+                                                    "z logs/evaluations.jsonl (bez wywołań modelu odniesienia)")
     parser.add_argument("--last", type=int, default=100, help="ile ostatnich ocenionych ofert (domyślnie 100)")
     parser.add_argument("--rownolegle", type=int, default=10, help="wywołań AI naraz (domyślnie 10)")
     parser.add_argument("--bez-bramki", action="store_true", help="wszystkie oferty do AI (bez bramki Snipera)")

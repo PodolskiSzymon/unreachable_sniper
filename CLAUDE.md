@@ -14,7 +14,7 @@ stara kopia, nie czytać.
   botów (auto-zakup wyłączony, `SNIPER_BUY_ENABLED=false`, bo Vinted wylogowuje konto bota).
 * Nie commitować sekretów (`.env`, klucze, hasła, tokeny, temat ntfy, `logs/`, `session.json`, profil przeglądarki).
 * Gałąź jak w `analyse_data` (stan: `claude/gifted-volta-x1764p`), commit + push, bez PR. Bez identyfikatora modelu
-  AI w commitach/kodzie. Testy: `python -m pytest sniper/tests -q` (259 + 1 pominięty).
+  AI w commitach/kodzie. Testy: `python -m pytest sniper/tests -q` (274 + 1 pominięty).
 
 ## Moduły (`sniper/`)
 
@@ -28,7 +28,8 @@ stara kopia, nie czytać.
 | `config.py` | całe `.env` (`ScoutConfig`, `AiConfig` z `SNIPER_RULE_*`, `MODEL_PRICES`) |
 | `evaluator.py` | `submit` (`route` - wiersze rodziny i kategoria z tytułu, już widziana, słowa, bramka tabeli i podobnych wg reguły zysku, bez danych = bez AI, limit $) → ocena dwuetapowa (szybka: myślenie low + zdjęcia medium; pełna tylko dla okazji / ≥ 6) przez Gemini/Anthropic/OpenRouter (`Task`) → `enforce_profit_rule`, PL +1 → logi, raport, mail, ntfy |
 | `experiment.py` | tryby `mediany` (`MEDIANS_TASK`, `finish_medians`, `cheap_guard`) i `model` (`formula_score`); CLI eksperymentu |
-| `guides.py`, `comparables.py` | tabela wytycznych + dopasowanie po słowach; `route` / `family_rows` (31.10): do AI tylko wiersze rodziny oferty (model + warianty, opis, rodzina / marka, sąsiednie kategorie), `rules_text` (stała legenda); `comparables.db` (FTS5): `levels`, `lookup` (bramka „za drogo” w `evaluator.gate`) |
+| `specs.py` | specyfikacja laptopa (karta / procesor + generacja / RAM / dysk / MacBook) z tytułu, opisu i formularza - te same reguły co `analyse_data/analyzer/extract.py` + `comparables.laptop_spec` (test `SPEC_PARITY` w obu repo); `spec_from_ai` (AI odczytuje specyfikację, gdy tekst jej nie ma) |
+| `guides.py`, `comparables.py` | tabela wytycznych + dopasowanie po słowach; `route` / `family_rows` (31.10): do AI tylko wiersze rodziny oferty (model + warianty, opis, rodzina / marka, sąsiednie kategorie), `rules_text` (stała legenda); `comparables.db` (FTS5): `levels`, `lookup` (bramka „za drogo” w `evaluator.gate`), od 01.11 `spec_levels` (laptopy po specyfikacji, tabela `laptop_specs`) |
 | `bench.py`, `bench_golden.json`, `basal.py` | porównanie wariantów oceny (jakość / koszt) na złotym zbiorze; tryb basal (nieprzetestowany na żywo) |
 | `report.py`, `mirror.py`, `notifier.py`, `push.py` | `oceny.html` (+ `--stats`), kopia logów na Dysk, mail, ntfy |
 | `account*.py`, `buyer.py`, `autobuy.py`, `check_detection.py` | konto i auto-zakup (wyłączone) |

@@ -82,6 +82,8 @@ class Comparables:
             self._conn = sqlite3.connect(f"file:{self.path.as_posix()}?mode=ro", uri=True, check_same_thread=False)
             row = self._conn.execute("SELECT value FROM meta WHERE key = 'rows'").fetchone()
             self._rows, self._mtime = int(row[0]) if row else 0, mtime
+            self._specs = bool(self._conn.execute(
+                "SELECT 1 FROM sqlite_master WHERE type='table' AND name='laptop_specs'").fetchone())
             log.info("[AI] Porównywalne oferty: %s (%d ofert)", self.path, self._rows)
         return self._conn
 
@@ -117,6 +119,43 @@ class Comparables:
             if found:
                 return found
         return None
+
+    def has_specs(self):
+        """Czy plik ma tabelę laptopów po specyfikacji (analizator od 2026-11-01)."""
+        try:
+            return self._db() is not None and getattr(self, "_specs", False)
+        except sqlite3.Error:
+            return False
+
+    def spec_levels(self, spec):
+        """Mediany laptopów po specyfikacji → lista statystyk jak levels() (+ "kind": "spec"); pusta, gdy brak."""
+        path = spec_path(spec)
+        if not path or not self.has_specs():
+            return []
+        out, seen = [], set()
+        try:
+            db = self._db()
+            for cols in SPEC_PLANS[path]:
+                if not all(spec.get(c) for c in cols):
+                    continue
+                where = " AND ".join(f"{c} = ?" for c in cols) + (" AND gpu IS NULL" if path == "cpu" else "")
+                rows = db.execute(f"SELECT price, gone FROM laptop_specs WHERE {where}",
+                                  [spec[c] for c in cols]).fetchall()
+                active = [p for p, g in rows if not g]
+                gone = [p for p, g in rows if g]
+                if len(active) + len(gone) < self.min_offers:
+                    continue
+                stats = _stats(active, gone)
+                key = (stats["n_active"], stats["n_gone"], stats["median"])
+                if key in seen:
+                    continue
+                seen.add(key)
+                out.append({**stats, "words": [str(spec[c]) for c in cols], "label": _spec_label(spec, cols),
+                            "kind": "spec"})
+        except sqlite3.Error as exc:
+            log.warning("[AI] Mediany po specyfikacji niedostępne: %s", exc)
+            return []
+        return out
 
     def levels(self, category, title):
         """Mediany od najbardziej szczegółowej do ogólnej (eksperyment „mediany”, sniper/experiment.py):
@@ -185,12 +224,18 @@ class Comparables:
             (gone if was_gone else active).append(price)
         if len(active) + len(gone) < self.min_offers:
             return None
-        p25, med, p75 = _pct(active, .25), _pct(active, .5), _pct(active, .75)
-        gone_med = _pct(gone, .5) if len(gone) >= 10 else None
-        mid = (p25 + med) / 2 if active else None
-        estimate = max(x for x in (gone_med, mid) if x is not None) if (gone_med or mid) else None
-        return {"words": [*required, *variants, *informative], "n_active": len(active), "n_gone": len(gone),
-                "p25": p25, "median": med, "p75": p75, "gone_median": gone_med, "estimate": estimate}
+        return {"words": [*required, *variants, *informative], **_stats(active, gone)}
+
+
+def _stats(active, gone):
+    """Statystyki grupy: p25 / mediana / p75 aktywnych, mediana zniknięć (≥ 10) i szacunek szybkiej sprzedaży
+    (wyższa z: mediana zniknięć, środek p25–mediana) - jak w analizatorze."""
+    p25, med, p75 = _pct(active, .25), _pct(active, .5), _pct(active, .75)
+    gone_med = _pct(gone, .5) if len(gone) >= 10 else None
+    mid = (p25 + med) / 2 if active else None
+    estimate = max(x for x in (gone_med, mid) if x is not None) if (gone_med or mid) else None
+    return {"n_active": len(active), "n_gone": len(gone), "p25": p25, "median": med, "p75": p75,
+            "gone_median": gone_med, "estimate": estimate}
 
 
 def describe_levels(levels):
@@ -198,11 +243,42 @@ def describe_levels(levels):
     if not levels:
         return ("\n\n<mediany>\nBRAK podobnych ofert w bazie rynku (żadna mediana).\n</mediany>")
     zl = lambda v: "-" if v is None else f"{v:,.0f}".replace(",", " ")  # noqa: E731
-    lines = [f"{i}. {lv['label']} (słowa: {' '.join(lv['words'])}): aktywnych {lv['n_active']} - p25 "
+    lines = [f"{i}. {lv['label']} ({'specyfikacja' if lv.get('kind') == 'spec' else 'słowa'}: "
+             f"{' '.join(lv['words'])}): aktywnych {lv['n_active']} - p25 "
              f"{zl(lv['p25'])}, mediana {zl(lv['median'])}, p75 {zl(lv['p75'])} zł; zniknęło {lv['n_gone']} "
              f"(mediana {zl(lv['gone_median'])} zł); szacunek szybkiej sprzedaży ~{zl(lv['estimate'])} zł"
              for i, lv in enumerate(levels, 1)]
     return "\n\n<mediany>\n" + "\n".join(lines) + "\n</mediany>"
+
+
+# Mediany laptopów po specyfikacji (2026-11-01): od najdokładniejszej do samej karty / chipu / procesora.
+SPEC_PLANS = {
+    "gpu": (("gpu", "ram", "ssd"), ("gpu", "ram"), ("gpu",)),
+    "mac": (("line", "chip", "ram", "ssd"), ("line", "chip", "ram"), ("line", "chip")),
+    "cpu": (("cpu_line", "cpu_gen", "ram", "ssd"), ("cpu_line", "cpu_gen", "ram"), ("cpu_line", "cpu_gen")),
+}
+
+
+def spec_path(spec):
+    if not spec:
+        return None
+    if spec.get("gpu"):
+        return "gpu"
+    if spec.get("line") and spec.get("chip"):
+        return "mac"
+    return "cpu" if spec.get("cpu_line") and spec.get("cpu_gen") else None
+
+
+def _spec_label(spec, cols):
+    from .specs import describe
+    shown = {k: spec.get(k) for k in cols}
+    if "gpu" not in cols:
+        shown["gpu"] = None
+    text = describe({**{k: None for k in spec}, **shown})
+    rest = [name for key, name in (("ram", "RAM"), ("ssd", "dysk")) if key not in cols]
+    suffix = f" (każdy {' i '.join(rest)})" if rest else ""
+    graphics = " (zintegrowana grafika)" if cols[0] == "cpu_line" else ""
+    return text + graphics + suffix
 
 
 def describe(found):

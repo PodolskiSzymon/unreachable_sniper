@@ -21,6 +21,7 @@ Test bez czekania na ogłoszenie (kosztuje jedno wywołanie na ofertę):
 """
 import argparse
 import asyncio
+import base64
 import csv
 import json
 import logging
@@ -33,7 +34,7 @@ from pathlib import Path
 import httpx
 
 from .categories import CATEGORY_NAMES
-from .config import MODEL_PRICES, AiConfig
+from .config import MODEL_PRICES, AiConfig, provider_api_key
 from .guides import GuideBook, Route
 
 log = logging.getLogger("sniper.ai")
@@ -236,10 +237,40 @@ def offer_text(offer):
         f"KOSZT ZAKUPU (cena + wysyłka + opłata): {_money(purchase_cost(offer), offer.currency)}\n"
         f"Stan: {offer.condition or '?'}\n"
         f"Marka: {offer.brand or '?'}\n"
+        f"{_form_line(offer)}"
         f"Sprzedawca: {'; '.join(seller)}\n"
         f"Opis:\n{offer.description or '(brak)'}\n"
         f"</oferta>"
     )
+
+
+# Pola formularza Vinted pokazywane modelowi (2026-11-01: specyfikacja laptopa, pamięć telefonu / tabletu).
+FORM_FIELDS = (("computer_cpu_line", "procesor"), ("computer_ram", "RAM"), ("computer_storage_capacity", "dysk"),
+               ("laptop_display_size", "ekran"), ("internal_memory_capacity", "pamięć"),
+               ("video_game_platform", "platforma"), ("computer_operating_system", "system"))
+
+
+def _form_line(offer):
+    attrs = getattr(offer, "attributes", None) or {}
+    found = [f"{label}: {attrs[code]}" for code, label in FORM_FIELDS if attrs.get(code)]
+    return f"Formularz Vinted: {'; '.join(found)}\n" if found else ""
+
+
+_STORAGE = re.compile(r"\b(16|32|64|128|256|512|1024|1)\s*(gb|tb)\b", re.I)
+
+
+def lookup_title(offer):
+    """Tytuł do median po słowach; telefon / tablet bez pojemności w tytule - pojemność z formularza albo opisu
+    („iPad Air 4” + „64 GB” w polu pamięci → „iPad Air 4 64 GB”), bo od niej zależy cena."""
+    title = offer.title or ""
+    if getattr(offer, "category", None) not in ("phone", "tablet") or _STORAGE.search(title):
+        return title
+    attrs = getattr(offer, "attributes", None) or {}
+    for text in (attrs.get("internal_memory_capacity") or "", getattr(offer, "description", "") or ""):
+        match = _STORAGE.search(text)
+        if match:
+            return f"{title} {match.group(1)} {match.group(2).upper()}"
+    return title
 
 
 def _photo_intro(offer, photos):
@@ -441,19 +472,26 @@ def _usage(input_tokens=0, output_tokens=0, cache_creation=0, cache_read=0):
 
 
 # ---------------------------------------------------------------------------- Claude (Anthropic)
-def build_request(offer, cfg: AiConfig, guidelines, with_photos=True, hint="", task=None):
-    """Argumenty dla Anthropic client.beta.messages.create(...)."""
+def build_request(offer, cfg: AiConfig, guidelines, with_photos=True, hint="", task=None, images=None):
+    """Argumenty dla Anthropic client.beta.messages.create(...). images: [(url, bajty)] pobrane przez nas
+    (SNIPER_AI_PHOTOS=download) - wtedy zdjęcia w zapytaniu (base64) zamiast linków do CDN Vinted."""
     task = task or DEFAULT_TASK
     photos = offer.photo_urls[:max(cfg.max_photos, 0)] if with_photos else []
     content = []
-    intro = _photo_intro(offer, photos)
+    intro = _photo_intro(offer, images if images is not None else photos)
     if intro:
         content.append({"type": "text", "text": intro})
-    content += [{"type": "image", "source": {"type": "url", "url": url}} for url in photos]
+    if images is not None:
+        content += [{"type": "image", "source": {"type": "base64", "media_type": image_mime(url),
+                                                 "data": base64.standard_b64encode(data).decode("ascii")}}
+                    for url, data in images]
+        photos = [url for url, _data in images]
+    else:
+        content += [{"type": "image", "source": {"type": "url", "url": url}} for url in photos]
     content.append({"type": "text", "text": _task_text(offer, hint, task)})
 
     output_config = {"format": {"type": "json_schema", "schema": task.schema}}
-    if cfg.effort:
+    if cfg.effort and not cfg.model.startswith("claude-haiku-4"):      # Haiku 4.5 nie zna effort (400)
         output_config["effort"] = cfg.effort
     request = {
         "model": cfg.model,
@@ -463,8 +501,9 @@ def build_request(offer, cfg: AiConfig, guidelines, with_photos=True, hint="", t
         "messages": [{"role": "user", "content": content}],
         "output_config": output_config,
     }
-    if cfg.fallback:
-        # Gdy model odmówi odpowiedzi, API samo powtórzy zapytanie na zalecanym modelu zapasowym.
+    if cfg.fallback and not cfg.model.startswith("claude-haiku"):
+        # Gdy model odmówi odpowiedzi, API samo powtórzy zapytanie na zalecanym modelu zapasowym. Haiku nie ma
+        # zapasowego po stronie serwera (Haiku 5.5: lista modeli = 400, "default" nic nie zmienia) - bez tego pola.
         request["betas"] = [FALLBACK_BETA]
         request["fallbacks"] = "default"
     return request, len(photos)
@@ -496,7 +535,12 @@ class AnthropicBackend:
         self.client = client or anthropic.AsyncAnthropic(api_key=cfg.api_key, timeout=cfg.timeout, max_retries=0)
 
     async def generate(self, offer, guidelines, with_photos, hint="", task=None, cfg=None):
-        request, photos = build_request(offer, cfg or self.cfg, guidelines, with_photos, hint, task)
+        cfg = cfg or self.cfg
+        images = None
+        if with_photos and self.cfg.photos == "download":
+            urls = offer.photo_urls[:max(cfg.max_photos, 0)]
+            images = await download_photos(self, urls)
+        request, photos = build_request(offer, cfg, guidelines, with_photos, hint, task, images)
         response = await self.client.beta.messages.create(**request)
         return response, usage_dict(response), photos
 
@@ -521,7 +565,27 @@ class AnthropicBackend:
         return None
 
     async def close(self):
+        if getattr(self, "_http", None) is not None:
+            await self._http.aclose()
         await self.client.close()
+
+
+async def download_photos(backend, urls):
+    """Zdjęcia pobrane bezpośrednio z domowego IP (trust_env=False - nie przez proxy) → [(url, bajty)]."""
+    if getattr(backend, "_http", None) is None:
+        backend._http = httpx.AsyncClient(trust_env=False, timeout=20.0, follow_redirects=True)
+
+    async def one(url):
+        try:
+            response = await backend._http.get(url)
+            response.raise_for_status()
+            return url, response.content
+        except httpx.HTTPError as exc:
+            log.warning("[AI] Nie pobrałem zdjęcia %s: %r", url, exc)
+            return url, None
+
+    results = await asyncio.gather(*(one(url) for url in urls))
+    return [(url, data) for url, data in results if data is not None]
 
 
 # ---------------------------------------------------------------------------- Gemini (Google)
@@ -879,7 +943,9 @@ class OfferEvaluator:
     def describe(self):
         cfg = self.cfg
         stages = self.stage_configs()
-        staged = (f", ocena dwuetapowa (szybka: myślenie {stages[0].effort or '-'}, zdjęcia "
+        quick_model = (f"{stages[0].provider}: {stages[0].model}, " if len(stages) > 1 and
+                       stages[0].model != cfg.model else "")
+        staged = (f", ocena dwuetapowa (szybka: {quick_model}myślenie {stages[0].effort or '-'}, zdjęcia "
                   f"{stages[0].media_resolution or 'domyślne'}; pełna od {getattr(cfg, 'confirm_from', 6.0):g}/10 "
                   f"albo okazji)" if len(stages) > 1 else ", jedna pełna ocena")
         return (f"{cfg.provider}: model {cfg.model} (effort {cfg.effort or '-'}), mail od oceny {cfg.min_score:g}/10"
@@ -1004,8 +1070,17 @@ class OfferEvaluator:
         reason = self.guides.gate(category, offer.title, _offer_price(offer), getattr(self.cfg, "price_gate", 0))
         if reason:
             return reason
-        comps = self.lookup_comparables(offer)
         cost, factor = _offer_price(offer), getattr(self.cfg, "comparable_factor", 1.2)
+        if self.spec_mode(offer):
+            # Laptop: mediany po specyfikacji; najwyższy szacunek z poziomów (AI może wybrać ogólniejszy).
+            estimates = [lv["estimate"] for lv in self.levels(offer) if lv.get("estimate")]
+            limit = rule_max_buy(max(estimates) * factor, self.cfg) if estimates and factor else None
+            if limit is not None and cost is not None and cost > limit:
+                from .specs import describe as spec_text
+                return (f"za drogo wg median specyfikacji ({spec_text(self.spec(offer))}): {cost:.0f} zł > max zakup "
+                        f"{limit:.0f} zł przy wycenie {max(estimates) * factor:.0f} zł")
+            return self.no_data_reason(offer)
+        comps = self.lookup_comparables(offer)
         if comps and comps.get("estimate") and cost is not None and factor:
             # 31.10: dokładnie reguła zysku przy najwyższej wycenie, jaką program przepuści (szacunek × factor -
             # enforce_profit_rule przycina do niej wycenę AI), zamiast stałych 0,9 × szacunku: przy tanich rzeczach
@@ -1040,6 +1115,8 @@ class OfferEvaluator:
                 self._warned_no_comparables = True
                 log.warning("[AI] Brak %s - tryb mediany nie ma żadnych median, więc oferty spoza kategorii laptopów "
                             "idą bez AI. Uruchom w analizatorze: python -m analyzer auto --force (kopiuje plik).", path)
+            if self.spec_mode(offer) and not self.spec(offer):
+                return None            # specyfikacji nie ma w tekście - AI odczyta ją z opisu / zdjęć / numeru modelu
             if not self.levels(offer) and 3.0 < self.notify_floor():
                 return "brak danych rynku (żadnej mediany w bazie) - ocena i tak najwyżej 3"
             return None
@@ -1050,9 +1127,34 @@ class OfferEvaluator:
         return None
 
     def uses_medians(self, offer):
-        """SNIPER_EVAL_MODE=mediany - poza laptopami (tam tabela kart graficznych i ręczne wytyczne)."""
-        return (getattr(self.cfg, "eval_mode", "zwykly") == "mediany"
-                and getattr(offer, "category", None) not in (None, "laptop"))
+        """SNIPER_EVAL_MODE=mediany. Laptopy od 01.11 też - po specyfikacji (spec_mode), gdy comparables.db ma tabelę
+        laptop_specs; ze starym plikiem laptopy dalej zwykłym trybem (tabela kart graficznych + podobne oferty)."""
+        category = getattr(offer, "category", None)
+        if getattr(self.cfg, "eval_mode", "zwykly") != "mediany" or category is None:
+            return False
+        return category != "laptop" or self.spec_mode(offer)
+
+    def spec_mode(self, offer):
+        """Laptop wyceniany po specyfikacji (karta / procesor / RAM / dysk), nie po słowach tytułu."""
+        if getattr(self.cfg, "eval_mode", "zwykly") != "mediany" or getattr(offer, "category", None) != "laptop":
+            return False
+        comparables = getattr(self, "comparables", None)
+        return bool(comparables is not None and comparables.has_specs())
+
+    def spec(self, offer):
+        """Specyfikacja laptopa z tytułu, opisu i formularza (sniper/specs.py) - raz na ofertę; None = nieznana."""
+        cache = self.__dict__.setdefault("_spec_cache", {})
+        if offer.id not in cache:
+            if len(cache) > 500:
+                cache.clear()
+            from .specs import laptop_spec
+            cache[offer.id] = laptop_spec(offer.title, getattr(offer, "description", "") or "",
+                                          getattr(offer, "attributes", None) or {})
+        return cache[offer.id]
+
+    def task_for(self, offer):
+        from .experiment import LAPTOP_TASK, MEDIANS_TASK
+        return LAPTOP_TASK if self.spec_mode(offer) else MEDIANS_TASK
 
     def route(self, offer):
         """Wiersze tabeli dla oferty (GuideBook.route) - raz na ofertę. Oferta wystawiona w złym katalogu (iPad
@@ -1084,7 +1186,12 @@ class OfferEvaluator:
             if len(cache) > 500:
                 cache.clear()
             comparables = getattr(self, "comparables", None)
-            cache[offer.id] = comparables.levels(getattr(offer, "category", None), offer.title) if comparables else []
+            if comparables is None:
+                cache[offer.id] = []
+            elif self.spec_mode(offer):
+                cache[offer.id] = comparables.spec_levels(self.spec(offer))
+            else:
+                cache[offer.id] = comparables.levels(getattr(offer, "category", None), lookup_title(offer))
         return cache[offer.id]
 
     def lookup_comparables(self, offer):
@@ -1093,7 +1200,8 @@ class OfferEvaluator:
             if len(cache) > 500:
                 cache.clear()
             comparables = getattr(self, "comparables", None)
-            cache[offer.id] = comparables.lookup(getattr(offer, "category", None), offer.title) if comparables else None
+            cache[offer.id] = (comparables.lookup(getattr(offer, "category", None), lookup_title(offer))
+                               if comparables else None)
         return cache[offer.id]
 
     async def _process(self, offer):
@@ -1160,14 +1268,44 @@ class OfferEvaluator:
         return record
 
     def stage_configs(self):
-        """Ustawienia kolejnych etapów oceny: [szybka, pełna] (SNIPER_AI_TWO_STAGE) albo [pełna]."""
+        """Ustawienia kolejnych etapów oceny: [szybka, pełna] (SNIPER_AI_TWO_STAGE) albo [pełna]. Szybka może iść na
+        innym modelu / u innego dostawcy (SNIPER_AI_QUICK_MODEL / SNIPER_AI_QUICK_PROVIDER)."""
         cfg = self.cfg
         if not getattr(cfg, "two_stage", False):
             return [cfg]
         quick = replace(cfg, effort=getattr(cfg, "quick_effort", "") or cfg.effort,
                         media_resolution=getattr(cfg, "quick_media_resolution", "") or
                         getattr(cfg, "media_resolution", ""))
+        provider = getattr(cfg, "quick_provider", "") or cfg.provider
+        model = getattr(cfg, "quick_model", "") or cfg.model
+        if provider != cfg.provider or model != cfg.model:
+            # ceny z MODEL_PRICES (SNIPER_AI_PRICE_IN/OUT dotyczą głównego modelu); Haiku bez zapasowego modelu
+            quick = replace(quick, provider=provider, model=model, price_in=None, price_out=None,
+                            api_key=provider_api_key(provider, cfg.provider) if provider != cfg.provider
+                            else cfg.api_key)
         return [cfg] if quick == cfg else [quick, cfg]
+
+    def backend_for(self, cfg):
+        """Backend dla ustawień etapu (inny dostawca szybkiego etapu → osobny klient z jego kluczem)."""
+        if cfg is None or cfg.provider == self.cfg.provider:
+            return self.backend
+        backends = self.__dict__.setdefault("_backends", {})
+        if cfg.provider not in backends:
+            backends[cfg.provider] = make_backend(cfg)
+        return backends[cfg.provider]
+
+    def _usage_for(self, usage, cfg):
+        """Zużycie innego modelu niż główny → koszt w USD (cost_reported) zamiast tokenów liczonych cenami głównego."""
+        if cfg is None or cfg.model == self.cfg.model or not usage:
+            return usage
+        price_in, price_out = MODEL_PRICES.get(cfg.model, (0.0, 0.0))
+        stats = _Stats()
+        for key, value in usage.items():
+            if key in stats:
+                stats[key] += value or 0
+        return {"cost_reported": stats.cost_usd(price_in, price_out),
+                "quick_input_tokens": usage.get("input_tokens", 0) + usage.get("cache_read_input_tokens", 0),
+                "quick_output_tokens": usage.get("output_tokens", 0)}
 
     def needs_full(self, evaluation, medians=False):
         """Czy wynik szybkiej oceny wymaga pełnej (okazja albo ≥ SNIPER_AI_CONFIRM_FROM)."""
@@ -1194,10 +1332,11 @@ class OfferEvaluator:
                 hint, task = None, None
                 if medians:
                     from .comparables import describe_levels
-                    from .experiment import MEDIANS_TASK
                     levels = self.levels(offer)
-                    hint, task = self.market_hint(offer) + describe_levels(levels), MEDIANS_TASK
+                    hint, task = self.market_hint(offer) + describe_levels(levels), self.task_for(offer)
                 evaluation, usage, attempts, photos = await self._staged(offer, comps, hint, task, medians)
+                if medians:
+                    levels = self.levels(offer)             # po rozpoznaniu specyfikacji przez AI - nowe mediany
             except Exception as exc:
                 self._count("failed")
                 error = _describe(exc, self.backend)
@@ -1211,6 +1350,14 @@ class OfferEvaluator:
             from .experiment import finish_medians
             evaluation["levels"] = [{k: lv[k] for k in ("label", "n_active", "n_gone", "median", "estimate")}
                                     for lv in levels]
+            if self.spec_mode(offer):
+                from .specs import describe as spec_text
+                evaluation["spec"] = spec_text(self.spec(offer))
+                if self.__dict__.get("_spec_from_ai", {}).get(offer.id):
+                    evaluation["spec_source"] = self._spec_from_ai[offer.id]
+                    evaluation.setdefault("red_flags", []).append(
+                        f"Program: specyfikację ({evaluation['spec']}) rozpoznało AI ({self._spec_from_ai[offer.id]}) "
+                        f"- sprawdź ją przed zakupem")
             finish_medians(evaluation, offer, self.cfg, levels)
         else:
             enforce_profit_rule(evaluation, offer, self.cfg, comps)
@@ -1237,23 +1384,68 @@ class OfferEvaluator:
     async def _staged(self, offer, comps, hint, task, medians):
         """Ocena dwuetapowa: szybka, a pełna tylko dla obiecujących (needs_full). Zużycie tokenów - suma etapów."""
         stages = self.stage_configs()
+        plan = list(stages)
         total, attempts_all = {}, 0
         quick = None
-        for number, cfg in enumerate(stages, 1):
+        number = 0
+        while number < len(plan):
+            cfg = plan[number]
+            number += 1
             evaluation, usage, attempts, photos = await self._call_model(
                 offer, comps, hint=hint, task=task, cfg=cfg if len(stages) > 1 else None)
             for key, value in (usage or {}).items():
                 total[key] = total.get(key, 0) + (value or 0)
             attempts_all += attempts
-            if number < len(stages):
+            refreshed = self._refresh_spec_levels(offer, evaluation) if medians else None
+            if refreshed:
+                # Laptop: AI podało specyfikację, której nie było w tekście → mediany dla niej i pełna ocena z nimi.
+                hint, quick = refreshed, evaluation
+                plan[number:] = [self.cfg]                  # jeszcze jedna, pełna ocena (zamiast / po szybkiej)
+                continue
+            if number < len(plan):
                 if not self.needs_full(evaluation, medians):
-                    evaluation["stage"] = f"{number}/{len(stages)}"
+                    evaluation["stage"] = f"{number}/{len(plan)}"
                     return evaluation, total, attempts_all, photos
                 quick = evaluation
         if quick is not None:
             evaluation["score_quick"] = quick.get("score")
-        evaluation["stage"] = f"{len(stages)}/{len(stages)}"
+        evaluation["stage"] = f"{len(plan)}/{len(plan)}"
         return evaluation, total, attempts_all, photos
+
+    def _refresh_spec_levels(self, offer, evaluation):
+        """Laptop: specyfikacja od AI (laptop_specs) inna / pełniejsza niż z tekstu i ma mediany w bazie → nowa
+        podpowiedź dla ponownej oceny (raz na ofertę), inaczej None. Za drogo wg nowych median → None (bez kosztu)."""
+        if not self.spec_mode(offer):
+            return None
+        done = self.__dict__.setdefault("_spec_refreshed", set())
+        if offer.id in done:
+            return None
+        from .comparables import describe_levels
+        from .specs import describe as spec_text
+        from .specs import merge, same, significant, spec_from_ai
+        text_spec = self.spec(offer)
+        found = evaluation.get("laptop_specs") or {}
+        merged = merge(text_spec, spec_from_ai(found, offer.title))
+        if not merged or same(merged, text_spec) or (self.levels(offer) and not significant(text_spec, merged)):
+            return None
+        levels = self.comparables.spec_levels(merged)
+        if not levels:
+            return None
+        done.add(offer.id)
+        estimates = [lv["estimate"] for lv in levels if lv.get("estimate")]
+        cost, factor = _offer_price(offer), getattr(self.cfg, "comparable_factor", 1.2)
+        limit = rule_max_buy(max(estimates) * factor, self.cfg) if estimates and factor else None
+        if limit is not None and cost is not None and cost > limit:
+            log.info("[AI] %s: specyfikacja od AI (%s) - za drogo wg jej median (%.0f > %.0f zł), bez ponownej oceny.",
+                     offer.id, spec_text(merged), cost, limit)
+            return None
+        self.__dict__.setdefault("_spec_cache", {})[offer.id] = merged
+        self.__dict__.setdefault("_levels_cache", {})[offer.id] = levels
+        self.__dict__.setdefault("_spec_from_ai", {})[offer.id] = found.get("source") or "AI"
+        log.info("[AI] %s: specyfikacja od AI (%s: %s) - ponowna ocena z medianami po specyfikacji.", offer.id,
+                 found.get("source"), spec_text(merged))
+        return (self.market_hint(offer) + describe_levels(levels) +
+                f"\n\nSpecyfikacja do median (rozpoznana przez AI, źródło: {found.get('source')}): {spec_text(merged)}.")
 
     async def _call_model(self, offer, comps=None, hint=None, task=None, cfg=None):
         from .comparables import describe
@@ -1268,6 +1460,7 @@ class OfferEvaluator:
         if hint is None:
             hint = self.market_hint(offer) + describe(comps)
         extra = {"cfg": cfg} if cfg is not None else {}
+        backend = self.backend_for(cfg)
         with_photos = True
         attempt = 0
         while True:
@@ -1276,22 +1469,24 @@ class OfferEvaluator:
             try:
                 self._count("calls")
                 response, usage, photos = await asyncio.wait_for(
-                    self.backend.generate(offer, guidelines, with_photos, hint, task, **extra), self.cfg.timeout)
+                    backend.generate(offer, guidelines, with_photos, hint, task, **extra), self.cfg.timeout)
+                usage = self._usage_for(usage, cfg)
                 for key, value in usage.items():
-                    self._count(key, value)
-                return (self.backend.parse(response, task.normalize) if task else self.backend.parse(response),
+                    if key in _STAT_KEYS:
+                        self._count(key, value)
+                return (backend.parse(response, task.normalize) if task else backend.parse(response),
                         usage, attempt, photos)
             except Exception as exc:
-                if with_photos and self.backend.is_photo_error(exc):
+                if with_photos and backend.is_photo_error(exc):
                     # API nie przyjęło któregoś zdjęcia - ocena z samego tekstu.
                     log.warning("[AI] %s: 400 ze zdjęciami (%s) - ponawiam bez zdjęć.", offer.id,
-                                _describe(exc, self.backend))
+                                _describe(exc, backend))
                     with_photos = False
                     continue
-                if not _retryable(self.backend, exc) or attempt > self.cfg.retries:
+                if not _retryable(backend, exc) or attempt > self.cfg.retries:
                     raise
                 delay = self.cfg.retry_delay * 2 ** (attempt - 1)
-                log.info("[AI] %s: %s - próba %d/%d za %.0fs.", offer.id, _describe(exc, self.backend),
+                log.info("[AI] %s: %s - próba %d/%d za %.0fs.", offer.id, _describe(exc, backend),
                          attempt + 1, self.cfg.retries + 1, delay)
                 await asyncio.sleep(delay)
 
@@ -1385,6 +1580,8 @@ class OfferEvaluator:
         await asyncio.gather(*pending, return_exceptions=True)
 
     async def close(self):
+        for backend in self.__dict__.get("_backends", {}).values():
+            await backend.close()
         await self.backend.close()
 
 

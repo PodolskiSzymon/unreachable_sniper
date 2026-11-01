@@ -74,6 +74,53 @@ def normalize_medians(text):
 MEDIANS_TASK = Task(MEDIANS_SCHEMA, lambda guidelines, category: system_text(guidelines, category) + MEDIANS_RULES,
                     normalize_medians, "Oceń tę ofertę według wytycznych i median z bazy rynku.")
 
+# ---------------------------------------------------------------------------------------------- laptopy po specyfikacji
+# 2026-11-01 (użytkownik: „za specyfikację ludzie płacą, nie za model”): mediany laptopów po karcie / procesorze /
+# RAM / dysku (sniper/specs.py); AI podaje specyfikację TEJ sztuki - gdy tekst jej nie miał albo zdjęcia pokazują
+# inną (np. naklejka RTX), program liczy mediany dla niej i ocenia jeszcze raz (evaluator: _refresh_spec_levels).
+
+LAPTOP_SPECS_FIELD = {
+    "type": "object",
+    "description": "Specyfikacja TEJ sztuki (laptop).",
+    "properties": {
+        "gpu": _nullable("string", "Karta graficzna, np. 'RTX 4060'; 'zintegrowana', gdy brak dedykowanej; null, gdy "
+                         "nie wiadomo."),
+        "cpu": _nullable("string", "Procesor, np. 'Intel Core i5-1135G7', 'Ryzen 7 5800H', 'Apple M1 Pro'; null, gdy "
+                         "nie wiadomo."),
+        "ram_gb": _nullable("integer", "RAM w GB."),
+        "ssd_gb": _nullable("integer", "Dysk w GB (1 TB = 1000)."),
+        "source": {"type": "string", "enum": ["tekst", "zdjęcia", "numer modelu", "brak"],
+                   "description": "Skąd specyfikacja: tytuł / opis, zdjęcia (naklejki, zrzuty ustawień, BIOS), dokładny "
+                                  "numer modelu, brak."},
+    },
+    "required": ["gpu", "cpu", "ram_gb", "ssd_gb", "source"],
+    "additionalProperties": False,
+}
+LAPTOP_SCHEMA = {
+    **MEDIANS_SCHEMA,
+    "properties": {**MEDIANS_SCHEMA["properties"], "laptop_specs": LAPTOP_SPECS_FIELD},
+    "required": [*MEDIANS_SCHEMA["required"], "laptop_specs"],
+}
+LAPTOP_RULES = """
+D. Laptop: mediany w <mediany> są po SPECYFIKACJI (karta graficzna / procesor + generacja / RAM / dysk), nie po \
+modelu. W laptop_specs podaj specyfikację TEJ sztuki - z tytułu, opisu, zdjęć (naklejki, zrzuty ustawień, BIOS) albo \
+z dokładnego numeru modelu (np. 15ACH6H, 14-ce3002nh); source = skąd. Nie zgaduj z samej nazwy serii (Legion 5, \
+IdeaPad, Pavilion) - wtedy null i source = "brak". Gdy median brak albo specyfikacja różni się od tej z median (np. na \
+zdjęciu naklejka RTX, a mediany dla zintegrowanej grafiki), program policzy mediany dla Twojej specyfikacji i poprosi \
+o ponowną ocenę."""
+
+
+def normalize_laptop(text):
+    ev = normalize_medians(text)
+    found = json.loads(text).get("laptop_specs")
+    ev["laptop_specs"] = found if isinstance(found, dict) else None
+    return ev
+
+
+LAPTOP_TASK = Task(LAPTOP_SCHEMA, lambda guidelines, category: system_text(guidelines, category) + MEDIANS_RULES +
+                   LAPTOP_RULES, normalize_laptop,
+                   "Oceń ten laptop według wytycznych i median z bazy rynku (po specyfikacji).")
+
 
 def cheap_guard(ev, offer, cost, sale):
     """Okazja za < 45% wartości (wynik 27.10: tryb „model” dał 10/10 iPhone'om 16 / 16 Pro za 800 / 1000 zł od kont

@@ -2,6 +2,8 @@
 całej tabeli, zmiana kategorii oferty z tytułu, bramka wg reguły zysku, bez AI przy braku danych, ocena dwuetapowa."""
 import asyncio
 
+import pytest
+
 from sniper.evaluator import (EVALUATION_SCHEMA, LEGACY_ROWS, STATUS_EVALUATED, STATUS_FILTERED, OfferEvaluator,
                               rule_max_buy)
 from sniper.guides import GuideBook, cap_table, family_rows, laptop_cpu, manual_rules, manual_notes, parse_rows
@@ -260,3 +262,49 @@ def test_filtered_offer_has_reason_in_record(tmp_path):
     evaluator._finish = keep
     evaluator.submit(phone(title="iPhone 13 128GB", price=5000.0, total_price=5000.0))
     assert record["status"] == STATUS_FILTERED and "za drogo wg tabeli" in record["prefilter_reason"]
+
+
+# ----------------------------------------------------------------------------- tańsze modele (01.11)
+def test_quick_stage_on_haiku_without_fallbacks_and_priced_as_haiku(tmp_path):
+    """Szybki etap na Claude Haiku 5.5 ($0,10 / $0,50), pełna ocena okazji na głównym modelu; Haiku nie dostaje
+    pola fallbacks (nie ma zapasowego modelu po stronie serwera)."""
+    poor = {**EVAL_DEAL, "is_deal": False, "score": 3}
+    client = FakeClient(response(poor))
+    cfg = ai_cfg(tmp_path, two_stage=True, quick_model="claude-haiku-5-5", quick_effort="low")
+    evaluator = OfferEvaluator(cfg, FakeNotifier(), client=client)
+    record = run(evaluator.evaluate(laptop()))
+    call = client.calls[0]
+    assert call["model"] == "claude-haiku-5-5" and "fallbacks" not in call and "betas" not in call
+    assert call["output_config"]["effort"] == "low"
+    usage = record["usage"]                                     # 1200 we + 2500 z cache + 300 wy po cenach Haiku
+    assert usage["cost_reported"] == pytest.approx((1200 * 0.10 + 2500 * 0.10 * 0.1 + 300 * 0.50) / 1e6)
+    assert evaluator.total["input_tokens"] == 0 and evaluator.total["cost_reported"] > 0   # nie po cenach Opus
+    full = OfferEvaluator(ai_cfg(tmp_path), FakeNotifier(), client=FakeClient(response()))
+    run(full.evaluate(laptop()))
+    assert full.client.calls[0]["fallbacks"] == "default"       # główny model (nie Haiku) - bez zmian
+
+
+def test_quick_stage_other_provider_takes_own_key(tmp_path, monkeypatch):
+    from sniper.config import provider_api_key
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "klucz-anthropic")
+    monkeypatch.setenv("SNIPER_AI_API_KEY", "klucz-glowny")
+    cfg = ai_cfg(tmp_path, provider="gemini", model="gemini-3.8-flash", api_key="klucz-glowny", two_stage=True,
+                 quick_provider="anthropic", quick_model="claude-haiku-5-5")
+    evaluator = OfferEvaluator.__new__(OfferEvaluator)
+    evaluator.cfg = cfg
+    quick, full = evaluator.stage_configs()
+    assert (quick.provider, quick.model, quick.api_key) == ("anthropic", "claude-haiku-5-5", "klucz-anthropic")
+    assert (full.provider, full.api_key) == ("gemini", "klucz-glowny")
+    assert provider_api_key("openrouter", "gemini") == ""                  # SNIPER_AI_API_KEY nie dla innych
+
+
+def test_bench_compares_with_saved_evaluations(tmp_path):
+    from sniper.bench import SAVED, resolve_variants, summary
+    offer = laptop()
+    saved = {**EVAL_DEAL, "score": 8.0, "market_value_pln": 3100}
+    rows = [{"variant": "haiku55", "id": offer.id, "evaluation": {**saved, "score": 7.0}, "cost": 0.002,
+             "seconds": 1.0, "usage": {"input_tokens": 9000, "output_tokens": 800}, "error": None, "stage2": True}]
+    lines = summary(rows, {}, [(offer, saved)], {}, SAVED, {"haiku55": None})
+    line = next(x for x in lines if x.startswith("haiku55"))
+    assert line.split("|")[-1].split() == ["100%", "100%", "100%"]   # ta sama decyzja, ±1 pkt, cena ±15%
+    assert set(resolve_variants("modele")) == {"haiku55", "haiku55_low", "haiku55_szybka", "obecny"}
