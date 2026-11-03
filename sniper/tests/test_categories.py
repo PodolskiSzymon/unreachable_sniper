@@ -746,3 +746,93 @@ def test_auto_catalogs_start_exactly_at_floor():
     specs = parse_catalogs("3580:400-7400*3, 3661:100-5400, 3603:20-100")
     assert [s.price_from for s in apply_floor(specs, 300, exact=True)] == ["300", "300", "20"]
     assert [s.price_from for s in apply_floor(specs, 300)] == ["400", "300", "20"]      # lista ręczna: wyższe zostaje
+
+
+def _comparables_db_cond(path, rows):
+    """Jak analizator od 2026-11-03: kolumna stanu (new / used)."""
+    import sqlite3
+    from sniper.guides import tokens
+    db = sqlite3.connect(path)
+    db.executescript("""
+        CREATE VIRTUAL TABLE offers USING fts5(words, category UNINDEXED, price UNINDEXED, gone UNINDEXED,
+                                               cond UNINDEXED, tokenize = 'unicode61 remove_diacritics 2');
+        CREATE VIRTUAL TABLE vocab USING fts5vocab(offers, 'row');
+        CREATE TABLE meta (key TEXT PRIMARY KEY, value TEXT);""")
+    db.executemany("INSERT INTO offers VALUES (?, ?, ?, ?, ?)",
+                   [(" ".join(tokens(t)), c, p, g, cond) for t, c, p, g, cond in rows])
+    db.execute("INSERT INTO meta VALUES ('rows', ?)", (str(len(rows)),))
+    db.commit()
+    db.close()
+
+
+def test_a17_not_priced_from_new_5g_or_other_samsungs(tmp_path):
+    """Samsung A17 za 377 zł (03.11) był „okazją”, bo mediany mieszały nowe z metką (~700 zł), wersję 5G i każdy
+    Samsung z „17” / całą markę (~830 zł). Teraz: używany bez 5G ↔ używane bez 5G, kod „a17” jako fraza."""
+    from sniper.comparables import Comparables
+    rows = []
+    for i in range(12):
+        rows.append((f"Samsung Galaxy A17 128GB {i}", "phone", 450 + 5 * i, 0, "used"))          # używane ~480
+        rows.append((f"Samsung A17 128 GB", "phone", 470 + 5 * i, 1, "used"))
+        rows.append((f"Samsung Galaxy A17 5G 128GB", "phone", 560 + 5 * i, 0, "used"))           # 5G drożej
+        rows.append((f"Samsung Galaxy A17 128GB nowy", "phone", 700 + 5 * i, 0, "new"))         # nowe z metką
+        rows.append((f"Samsung Galaxy A17 256GB", "phone", 650 + 5 * i, 0, "used"))             # większa pamięć
+        rows.append((f"Samsung Galaxy S17 128GB", "phone", 1500 + 5 * i, 0, "used"))           # inny model z „17”
+        rows.append((f"Samsung Galaxy S24 Ultra", "phone", 3000, 0, "used"))
+    _comparables_db_cond(tmp_path / "c.db", rows)
+    comps = Comparables(tmp_path / "c.db")
+    levels = comps.levels("phone", "Samsung A17 128 GB", "Bardzo dobry")
+    assert levels and all(lv["condition"] == "used" for lv in levels)
+    assert all(lv["n_active"] + lv["n_gone"] == 24 for lv in levels)          # tylko używane A17 128 bez 5G
+    assert max(lv["estimate"] for lv in levels) < 520
+    no_storage = comps.levels("phone", "Samsung A17", "Bardzo dobry")
+    assert no_storage and max(lv["median"] for lv in no_storage) < 600       # bez S17 / S24 / nowych / 5G
+    five = comps.levels("phone", "Samsung Galaxy A17 5G 128GB", "Dobry")
+    assert five and all(560 <= lv["median"] <= 620 for lv in five)
+    new = comps.levels("phone", "Samsung Galaxy A17 128GB", "Nowy z metką")
+    assert new and all(lv["median"] >= 700 for lv in new)
+    big = comps.levels("phone", "Samsung Galaxy A17 256GB", "Bardzo dobry")
+    assert big[0]["median"] >= 650                                              # 256 GB osobno
+    # stary plik (bez kolumny stanu) dalej działa - bez filtra stanu
+    _comparables_db(tmp_path / "old.db", [(t, c, p, g) for t, c, p, g, _cond in rows])
+    assert Comparables(tmp_path / "old.db").levels("phone", "Samsung A17 128 GB", "Bardzo dobry")
+
+
+def test_title_roles():
+    from sniper.comparables import parse_title
+    a17 = parse_title("phone", "Samsung Galaxy A17 5G 4/128")
+    assert a17["codes"] == [("a", "17")] and a17["net"] and a17["ram"] == 4 and a17["storage"] == 128
+    assert parse_title("phone", "iPhone 13 Pro Max 256GB")["codes"] == []            # „max 256” to nie model
+    ram = parse_title("ram", "Kingston Fury 16GB DDR4 3200MHz")
+    assert ram["codes"] == [("ddr", "4")] and ram["storage"] == 16
+    assert parse_title("console", "PS4 slim 500GB + 2 pady")["model_numbers"][0] == "4"
+    assert parse_title("console", "Xbox z 2 padami")["codes"] == []                   # „z 2” - spójnik
+    assert parse_title("tablet", "iPad Air 5 64GB Wi-Fi + Cellular")["net"]
+
+
+def test_used_offer_does_not_see_new_rows():
+    from types import SimpleNamespace
+    from sniper.guides import for_condition
+    rows = [SimpleNamespace(name="galaxy a17 128 GB"), SimpleNamespace(name="galaxy a17 128 GB (nowe)")]
+    assert [r.name for r in for_condition(rows, "Bardzo dobry")] == ["galaxy a17 128 GB"]
+    assert len(for_condition(rows, "Nowy z metką")) == 2 and len(for_condition(rows, None)) == 2
+
+
+def test_levels_fallbacks_keep_model(tmp_path):
+    """5G w tytule, a w bazie wersje bez „5G” (iPhone 12+) → wszystkie wersje sieci; tytuł z obcymi słowami →
+    „ten sam model, pozostałe słowa dowolne”; karta - sam układ, dowolny producent; nigdy inny model."""
+    from sniper.comparables import Comparables
+    rows = []
+    for i in range(12):
+        rows.append((f"Apple iPhone 14 Plus 256GB {i}", "phone", 1600 + 10 * i, 0, "used"))
+        rows.append((f"Samsung Galaxy S22 128GB", "phone", 900 + 10 * i, 0, "used"))
+        rows.append((f"Samsung Galaxy S21 128GB", "phone", 600 + 10 * i, 0, "used"))
+        rows.append((f"MSI RTX 3050 Ventus 8GB", "gpu", 700 + 10 * i, 0, "used"))
+        rows.append((f"RTX 3060 12GB", "gpu", 1100, 0, "used"))
+    _comparables_db_cond(tmp_path / "c.db", rows)
+    comps = Comparables(tmp_path / "c.db")
+    iph = comps.levels("phone", "Apple iPhone 14 Plus, 256GB, 5G, albastru", "Bardzo dobry")
+    assert iph and "wszystkie wersje sieci" in iph[0]["label"] and 1600 <= iph[0]["median"] <= 1720
+    s22 = comps.levels("phone", "Vând Samsung S22 impecabil", "Bardzo dobry")
+    assert s22 and all(900 <= lv["median"] <= 1020 for lv in s22)             # bez S21
+    gpu = comps.levels("gpu", "Gigabyte RTX 3050", "Bardzo dobry")
+    assert gpu and all(lv["median"] < 900 for lv in gpu)                       # bez RTX 3060

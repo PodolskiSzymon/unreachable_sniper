@@ -292,6 +292,18 @@ def family_rows(rows, title, description="", category=None, limit=FAMILY_LIMIT, 
     return [], 0, []
 
 
+NEW_SUFFIX = "(nowe)"              # analizator od 2026-11-03: wiersz tylko z ofert „Nowy z metką / bez metki”
+
+
+def for_condition(rows, condition):
+    """Oferta używana nie dostaje wierszy z cenami nowych („galaxy a17 128 GB (nowe)” ~700 zł przy używanych
+    ~490 zł - 03.11 AI uznało używany A17 za 377 zł za okazję). Nowa oferta - wszystkie wiersze."""
+    from .comparables import condition_group
+    if condition_group(condition) != "used":
+        return rows
+    return [r for r in rows if not getattr(r, "name", "").rstrip().endswith(NEW_SUFFIX)]
+
+
 @dataclass
 class Route:
     """Wiersze tabeli dla oferty: kategoria (może być inna niż katalog), wiersze, poziom dopasowania, uwaga."""
@@ -578,11 +590,11 @@ class GuideBook:
                 text += "\n\n## Zasady użytkownika (laptopy)\n\n" + rules
         return text
 
-    def gate(self, category, title, price, factor):
-        """Powód pominięcia oferty przed AI (za droga wg tabeli) albo None."""
+    def gate(self, category, title, price, factor, condition=None):
+        """Powód pominięcia oferty przed AI (za droga wg tabeli) albo None. Używana oferta - bez wierszy „(nowe)”."""
         if not factor or price is None:
             return None
-        rows = [r for r in self.match(category, title) if r.max_buy]
+        rows = [r for r in for_condition(self.match(category, title), condition) if r.max_buy]
         if rows:
             # Kilka równie dokładnych wierszy (iPad Air (2020) / (2022) przy tytule bez roku) → najwyższy próg.
             top = [r for r in rows if len(r.words) == len(rows[0].words)]
@@ -590,7 +602,7 @@ class GuideBook:
             limit, name = best.max_buy, best.name
         else:
             # Tytuł bez pojemności: próg NAJWYŻSZY spośród wariantów pamięci (na pewno nie odrzucimy okazji).
-            rows = [r for r in self.match(category, title, relaxed=True) if r.max_buy]
+            rows = [r for r in for_condition(self.match(category, title, relaxed=True), condition) if r.max_buy]
             if not rows:
                 return None
             best = max(rows, key=lambda r: r.max_buy)

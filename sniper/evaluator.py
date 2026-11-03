@@ -35,7 +35,7 @@ import httpx
 
 from .categories import CATEGORY_NAMES
 from .config import MODEL_PRICES, AiConfig, provider_api_key
-from .guides import GuideBook, Route
+from .guides import GuideBook, Route, for_condition
 
 log = logging.getLogger("sniper.ai")
 
@@ -1120,7 +1120,8 @@ class OfferEvaluator:
         category = getattr(offer, "category", None)
         if category is not None and self.guides.path(category) is None:
             return f"brak wytycznych dla kategorii {category}"
-        reason = self.guides.gate(category, offer.title, _offer_price(offer), getattr(self.cfg, "price_gate", 0))
+        reason = self.guides.gate(category, offer.title, _offer_price(offer), getattr(self.cfg, "price_gate", 0),
+                                  getattr(offer, "condition", None))
         if reason:
             return reason
         cost, factor = _offer_price(offer), getattr(self.cfg, "comparable_factor", 1.2)
@@ -1224,6 +1225,12 @@ class OfferEvaluator:
                     route = guides.route(category, offer.title, getattr(offer, "description", "") or "")
                 except Exception:                  # dobór wierszy nie może zatrzymać oceny
                     log.exception("[AI] Błąd doboru wierszy tabeli dla %s", offer.id)
+            condition = getattr(offer, "condition", None)
+            route.rows = for_condition(route.rows, condition)
+            if route.matched:
+                route.matched = for_condition(route.matched, condition)
+            if route.extra:
+                route.extra = [(c, for_condition(r, condition)) for c, r in route.extra]
             if route.category and route.category != category:
                 log.info("[AI] %s: %s.", offer.id, route.note or f"kategoria {category} → {route.category}")
                 offer.category = route.category
@@ -1242,9 +1249,10 @@ class OfferEvaluator:
             if comparables is None:
                 cache[offer.id] = []
             elif self.spec_mode(offer):
-                cache[offer.id] = comparables.spec_levels(self.spec(offer))
+                cache[offer.id] = comparables.spec_levels(self.spec(offer), getattr(offer, "condition", None))
             else:
-                cache[offer.id] = comparables.levels(getattr(offer, "category", None), lookup_title(offer))
+                cache[offer.id] = comparables.levels(getattr(offer, "category", None), lookup_title(offer),
+                                                     getattr(offer, "condition", None))
         return cache[offer.id]
 
     def lookup_comparables(self, offer):
@@ -1253,7 +1261,8 @@ class OfferEvaluator:
             if len(cache) > 500:
                 cache.clear()
             comparables = getattr(self, "comparables", None)
-            cache[offer.id] = (comparables.lookup(getattr(offer, "category", None), lookup_title(offer))
+            cache[offer.id] = (comparables.lookup(getattr(offer, "category", None), lookup_title(offer),
+                                                  getattr(offer, "condition", None))
                                if comparables else None)
         return cache[offer.id]
 
@@ -1371,7 +1380,7 @@ class OfferEvaluator:
         category = getattr(offer, "category", None)
         if getattr(self.cfg, "guide_rows", "rodzina") == "rodzina" and category is not None:
             return self.guides.family_text(self.route(offer))
-        return market_card(self.guides.match(category, offer.title))
+        return market_card(for_condition(self.guides.match(category, offer.title), getattr(offer, "condition", None)))
 
     async def evaluate(self, offer):
         """Ocena jednej oferty. Nigdy nie rzuca - błąd = rekord ze statusem 'nieoceniona'."""
@@ -1482,7 +1491,7 @@ class OfferEvaluator:
         merged = merge(text_spec, spec_from_ai(found, offer.title))
         if not merged or same(merged, text_spec) or (self.levels(offer) and not significant(text_spec, merged)):
             return None
-        levels = self.comparables.spec_levels(merged)
+        levels = self.comparables.spec_levels(merged, getattr(offer, "condition", None))
         if not levels:
             return None
         done.add(offer.id)

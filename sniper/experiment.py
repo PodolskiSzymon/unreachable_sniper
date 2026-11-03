@@ -58,7 +58,11 @@ B. Sprawdź, czy tytuł zgadza się z parametrami, opisem i zdjęciami (zrzuty z
 typu A2316 / CUH-7216B, ilość pamięci, karta graficzna w laptopie, RAM w telefonie). Gdy się nie zgadza – sprzedawca \
 pewnie się pomylił: wpisz faktyczny model w corrected_model, wyceniaj FAKTYCZNY model i dodaj to do red_flags.
 C. Gdy żadna mediana nie dotyczy tego przedmiotu (inny produkt, akcesorium zamiast urządzenia, brak median) – \
-in_medians = false, is_deal = false, score ≤ 3. Nie wyceniaj z własnej pamięci."""
+in_medians = false, is_deal = false, score ≤ 3. Nie wyceniaj z własnej pamięci.
+D. Wariant, którego ogłoszenie NIE podaje (5G / 4G, RAM, pojemność, Wi-Fi / LTE, Digital / z napędem, Ti / bez Ti), \
+przyjmij jako NAJTAŃSZY możliwy - lepszy tylko z dowodem w tytule, opisie, formularzu albo na zdjęciu (zrzut \
+ustawień, pudełko, naklejka). Mediany są już dla stanu tej oferty (używane z używanymi, nowe z nowymi) - nie \
+podnoś wyceny używanej sztuki do cen nowych."""
 
 
 def normalize_medians(text):
@@ -102,7 +106,7 @@ LAPTOP_SCHEMA = {
     "required": [*MEDIANS_SCHEMA["required"], "laptop_specs"],
 }
 LAPTOP_RULES = """
-D. Laptop: mediany w <mediany> są po SPECYFIKACJI (karta graficzna / procesor + generacja / RAM / dysk), nie po \
+E. Laptop: mediany w <mediany> są po SPECYFIKACJI (karta graficzna / procesor + generacja / RAM / dysk), nie po \
 modelu. W laptop_specs podaj specyfikację TEJ sztuki - z tytułu, opisu, zdjęć (naklejki, zrzuty ustawień, BIOS) albo \
 z dokładnego numeru modelu (np. 15ACH6H, 14-ce3002nh); source = skąd. Nie zgaduj z samej nazwy serii (Legion 5, \
 IdeaPad, Pavilion) - wtedy null i source = "brak". Gdy median brak albo specyfikacja różni się od tej z median (np. na \
@@ -328,7 +332,7 @@ async def _run_one(evaluator, mode, offer):
     category = getattr(offer, "category", None)
     try:
         if mode == "mediany":
-            levels = evaluator.comparables.levels(category, offer.title)
+            levels = evaluator.comparables.levels(category, offer.title, getattr(offer, "condition", None))
             hint = market_card(evaluator.guides.match(category, offer.title)) + describe_levels(levels)
             ev, usage, _, photos = await evaluator._call_model(offer, hint=hint, task=MEDIANS_TASK)
             ev["levels"] = [{k: lv[k] for k in ("label", "n_active", "n_gone", "median", "estimate")}

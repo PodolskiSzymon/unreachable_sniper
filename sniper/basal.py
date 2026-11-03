@@ -116,7 +116,7 @@ async def run(evaluator, offer, url=BASAL_URL, client=None):
         return None, None, 0, f"basal niedostępny ({url}): {exc!r}", {}
     hint_basal, chosen, flags = describe(answers, cands)
     query = chosen.name if chosen else offer.title
-    levels = evaluator.comparables.levels(category, query)
+    levels = evaluator.comparables.levels(category, query, getattr(offer, "condition", None))
     hint = market_card([chosen] if chosen else evaluator.guides.match(category, offer.title)) + \
         describe_levels(levels) + hint_basal
     info = {"choice": chosen.name if chosen else None, "query": query, "flags": flags, "latency_ms": latency,

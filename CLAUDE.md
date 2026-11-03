@@ -14,7 +14,7 @@ stara kopia, nie czytać.
   botów (auto-zakup wyłączony, `SNIPER_BUY_ENABLED=false`, bo Vinted wylogowuje konto bota).
 * Nie commitować sekretów (`.env`, klucze, hasła, tokeny, temat ntfy, `logs/`, `session.json`, profil przeglądarki).
 * Gałąź jak w `analyse_data` (stan: `claude/gifted-volta-x1764p`), commit + push, bez PR. Bez identyfikatora modelu
-  AI w commitach/kodzie. Testy: `python -m pytest sniper/tests -q` (282 + 1 pominięty).
+  AI w commitach/kodzie. Testy: `python -m pytest sniper/tests -q` (286 + 1 pominięty).
 
 ## Moduły (`sniper/`)
 

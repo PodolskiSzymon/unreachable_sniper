@@ -21,7 +21,9 @@ def test_levels_from_specific_to_family(tmp_path):
     comps = Comparables(tmp_path / "guides" / "comparables.db")
     levels = comps.levels("phone", "iPhone 13 128GB niebieski")
     assert levels[0]["n_active"] == 12 and levels[0]["n_gone"] == 12                  # sam iPhone 13 (bez Pro)
-    assert levels[-1]["label"].startswith("cała rodzina") and levels[-1]["n_active"] == 24   # + iPhone 13 Pro
+    # 2026-11-03: bez poziomu „cała rodzina” - iPhone 13 Pro nie miesza się z iPhone 13 na żadnym poziomie
+    assert all(lv["n_active"] < 24 and lv["median"] < 1400 for lv in levels)
+    assert not any("rodzina" in lv["label"] for lv in levels)
     text = describe_levels(levels)
     assert "<mediany>" in text and "1. " in text
     assert "BRAK" in describe_levels([])
