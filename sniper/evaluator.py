@@ -976,6 +976,16 @@ class OfferEvaluator:
         # Podgląd ocen w przeglądarce: logs/oceny.html (sniper/report.py).
         self.report = None
         self.push = None                 # PushNotifier (sniper/push.py) - ustawiany w __main__
+        self.hunter = None               # polowanie na kartę pod basala (sniper/hunt.py, SNIPER_HUNT_FOR_GPU)
+        if getattr(cfg, "hunt_for_gpu", False):
+            try:
+                from .hunt import Hunter
+                file = getattr(cfg, "hunt_file", "")
+                if file and not Path(file).is_absolute():
+                    file = Path(__file__).with_name(file) if not Path(file).exists() else Path(file)
+                self.hunter = Hunter(file or None, self.log_dir)
+            except Exception as exc:
+                log.error("[HUNT] Polowanie wyłączone - nie wczytałem celów: %r", exc)
         if self.log_dir:
             try:
                 from .report import ReportWriter
@@ -1066,6 +1076,11 @@ class OfferEvaluator:
     # ------------------------------------------------------------------ wejście z Zwiadowcy
     def submit(self, offer):
         """Nieblokujące: filtr wstępny od razu, ocena AI w osobnym zadaniu."""
+        if self.hunter is not None:              # polowanie - przed wszystkimi filtrami, bez kosztu AI
+            try:
+                self.hunter.check(offer, self.push)
+            except Exception as exc:
+                log.error("[HUNT] Błąd sprawdzania oferty %s: %r", getattr(offer, "id", "?"), exc)
         self.route(offer)                      # wiersze tabeli i ewentualna zmiana kategorii (zła kategoria Vinted)
         reason = (self.already_seen(offer) or prefilter(offer, self.cfg) or self.gate(offer)
                   or self.over_daily_limit())

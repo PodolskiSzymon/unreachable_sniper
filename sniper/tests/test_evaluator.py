@@ -690,3 +690,29 @@ def test_notifier_counts_mails_by_kind_and_journals(tmp_path, monkeypatch):
         rows = list(csv.DictReader(f, delimiter=";"))
     assert sorted(r["rodzaj"] for r in rows) == ["oferta", "systemowy", "systemowy"]
     assert all(r["wynik"] == "wysłany" for r in rows)
+
+
+def test_hunt_runs_before_filters(tmp_path):
+    """SNIPER_HUNT_FOR_GPU: trafienie z tabeli celów idzie na telefon, nawet gdy filtr słów odrzuca ofertę przed AI."""
+    sent = []
+
+    class Push:
+        cfg = SimpleNamespace(topic="t")
+
+        async def send(self, msg):
+            sent.append(msg)
+            return True
+
+    async def go():
+        evaluator = OfferEvaluator(ai_cfg(tmp_path, hunt_for_gpu=True, keywords=("nic-takiego",)), FakeNotifier(),
+                                   log_dir=tmp_path)
+        evaluator.push = Push()
+        from sniper.notifier import sample_offer
+        offer = sample_offer()
+        offer.title, offer.price, offer.description, offer.category = "Gigabyte RTX 3060 12GB", 450.0, "Sprawna.", "gpu"
+        evaluator.submit(offer)
+        await asyncio.sleep(0)
+        await evaluator.close()
+    run(go())
+    assert len(sent) == 1 and "RTX 3060" in sent[0]["title"]
+    assert (tmp_path / "hunt.jsonl").exists()

@@ -423,6 +423,10 @@ class AiConfig:
     # Asynchronicznie: limit równoległych wywołań, limit czasu jednej próby, liczba ponowień.
     # 2026-10-27: 10 zamiast 3 (prośba użytkownika - eksperyment 50 ofert trwał ~4 min przy 3 naraz).
     max_concurrent: int = _env_int("SNIPER_AI_MAX_CONCURRENT", 10)
+    # Polowanie na kartę pod basala (sniper/hunt.py): każda nowa oferta sprawdzana z tabelą celów z SNIPER_HUNT_FILE
+    # (domyślnie sniper/hunt_for_basal.md) - trafienie = ntfy z priorytetem 5, niezależnie od oceny AI.
+    hunt_for_gpu: bool = _env_bool("SNIPER_HUNT_FOR_GPU", False)
+    hunt_file: str = _env("SNIPER_HUNT_FILE")
     timeout: float = _env_float("SNIPER_AI_TIMEOUT", 120.0)
     retries: int = _env_int("SNIPER_AI_RETRIES", 2)
     retry_delay: float = _env_float("SNIPER_AI_RETRY_DELAY", 5.0)
