@@ -404,12 +404,18 @@ class AiConfig:
     no_data_max_score: float = _env_float("SNIPER_AI_NO_DATA_MAX_SCORE", 7.0)
     # Wycena AI najwyżej tyle × szacunek z podobnych ofert z bazy (comparables.db). 0 = bez przycinania.
     comparable_factor: float = _env_float("SNIPER_AI_COMPARABLE_FACTOR", 1.2)
-    # 2026-11-15 (sniper/market.py): rynek modelu mniejszy niż tyle ofert / miesiąc = okazja tylko przy cenie ≤
-    # niche_max_share × szacunek sprzedaży (reMarkable 2 z folio 9/10, a nikt nie kupuje); rotacja (udział zniknięć)
-    # poniżej min_turnover = ostrzeżenie i ocena -1; oferta „bez pudełka” = wycena × no_box_factor. 0 = wyłączone.
-    min_market_month: float = _env_float("SNIPER_MIN_MARKET_MONTH", 60.0)
+    # 2026-11-15 (sniper/market.py): nisza = rotacja modelu < niche_turnover (przy ≥ 15 ofertach) albo rynek <
+    # min_market_month ofert / mies. z rotacją < min_turnover → okazja tylko przy cenie ≤ niche_max_share × szacunek
+    # (też bramka przed AI); rotacja < min_turnover = ocena -1; tylko kategorie market_categories (podzespoły i laptopy
+    # mają mało ofert na model, a schodzą); oferta „bez pudełka” = wycena × no_box_factor. 0 = wyłączone.
+    min_market_month: float = _env_float("SNIPER_MIN_MARKET_MONTH", 10.0)
+    niche_turnover: float = _env_float("SNIPER_NICHE_TURNOVER", 0.10)
     niche_max_share: float = _env_float("SNIPER_NICHE_MAX_SHARE", 0.5)
-    min_turnover: float = _env_float("SNIPER_MIN_TURNOVER", 0.25)
+    # Czytniki i tablety graficzne (market.LOW_DEMAND) - bez rotacji, zawsze okazja tylko ≤ tyle × szacunek.
+    low_demand_max_share: float = _env_float("SNIPER_LOW_DEMAND_MAX_SHARE", 0.3)
+    min_turnover: float = _env_float("SNIPER_MIN_TURNOVER", 0.20)
+    market_categories: tuple = field(default_factory=lambda: tuple(
+        c.strip() for c in _env("SNIPER_MARKET_CATEGORIES", "phone,tablet,console").split(",") if c.strip()))
     no_box_factor: float = _env_float("SNIPER_NO_BOX_FACTOR", 0.88)
 
     # Mail tylko gdy ocena >= min_score; notify_all=true -> mail o każdej ofercie (z oceną albo bez).
