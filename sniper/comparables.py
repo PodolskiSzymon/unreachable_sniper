@@ -183,6 +183,17 @@ class Comparables:
             log.info("[AI] Porównywalne oferty: %s (%d ofert)", self.path, self._rows)
         return self._conn
 
+    def span_days(self):
+        """Z ilu dni są oferty w pliku (analizator od 2026-11-15, meta 'span_days'); None = nie wiadomo."""
+        try:
+            db = self._db()
+            if db is None:
+                return None
+            row = db.execute("SELECT value FROM meta WHERE key = 'span_days'").fetchone()
+            return float(row[0]) if row else None
+        except (sqlite3.Error, ValueError, TypeError):
+            return None
+
     def lookup(self, category, title, condition=None):
         """→ słownik ze statystykami podobnych ofert (najdokładniejszy poziom) albo None (brak pliku / danych)."""
         found = self.levels(category, title, condition)

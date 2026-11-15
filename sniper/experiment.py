@@ -62,7 +62,10 @@ in_medians = false, is_deal = false, score ≤ 3. Nie wyceniaj z własnej pamię
 D. Wariant, którego ogłoszenie NIE podaje (5G / 4G, RAM, pojemność, Wi-Fi / LTE, Digital / z napędem, Ti / bez Ti), \
 przyjmij jako NAJTAŃSZY możliwy - lepszy tylko z dowodem w tytule, opisie, formularzu albo na zdjęciu (zrzut \
 ustawień, pudełko, naklejka). Mediany są już dla stanu tej oferty (używane z używanymi, nowe z nowymi) - nie \
-podnoś wyceny używanej sztuki do cen nowych."""
+podnoś wyceny używanej sztuki do cen nowych.
+E. Dodatki (etui, klawiatura / folio, ładowarka, folia, rysik do czytnika) NIE podnoszą wyceny ponad medianę - \
+najwyżej przyspieszają sprzedaż (wyjątek: oryginalny rysik / klawiatura Apple do iPada, najwyżej +10%). Rzadki model \
+(mały rynek w <rynek>) to wolna sprzedaż - okazja tylko przy bardzo niskiej cenie."""
 
 
 def normalize_medians(text):
@@ -147,8 +150,10 @@ def cheap_guard(ev, offer, cost, sale):
     return ev
 
 
-def finish_medians(ev, offer, cfg, levels):
-    """Program po AI: brak w medianach → nie okazja; reguła zysku i przycięcie do wybranej mediany; premia PL."""
+def finish_medians(ev, offer, cfg, levels, span_days=None):
+    """Program po AI: brak w medianach → nie okazja; reguła zysku i przycięcie do wybranej mediany; premia PL;
+    reguły rynku (sniper/market.py: „bez pudełka” taniej, mały rynek, wolna rotacja)."""
+    from .market import apply_market_rules, no_box_factor
     if not levels or not ev.get("in_medians"):
         if ev.get("is_deal") or ev["score"] > 3:
             ev["score_ai"] = ev["score"]
@@ -157,8 +162,17 @@ def finish_medians(ev, offer, cfg, levels):
         return ev
     used = ev.get("median_used")
     comps = levels[used - 1] if used and 1 <= used <= len(levels) else levels[0]
+    factor = no_box_factor(offer, cfg)
+    if factor < 1:
+        # Bez pudełka: mediany (głównie z pudełkiem albo bez informacji) × factor - przycięcie i zysk od niższej ceny.
+        if comps.get("estimate"):
+            comps = {**comps, "estimate": comps["estimate"] * factor}
+        if ev.get("market_value_pln"):
+            ev["market_value_pln"] = round(ev["market_value_pln"] * factor)
+        ev.setdefault("red_flags", []).append(f"Program: bez pudełka - wycena × {factor:g}")
     enforce_profit_rule(ev, offer, cfg, comps)
     apply_pl_bonus(ev, offer, getattr(cfg, "pl_bonus", 0))
+    apply_market_rules(ev, offer, cfg, levels, span_days)
     from .extractor import purchase_cost
     return cheap_guard(ev, offer, purchase_cost(offer), ev.get("market_value_pln"))
 

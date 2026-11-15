@@ -1149,8 +1149,16 @@ class OfferEvaluator:
                 return (f"za drogo wg median specyfikacji ({spec_text(self.spec(offer))}): {cost:.0f} zł > max zakup "
                         f"{limit:.0f} zł przy wycenie {max(estimates) * factor:.0f} zł")
             return self.no_data_reason(offer)
+        if self.uses_medians(offer) and cost is not None:
+            from .market import niche_limit
+            niche = niche_limit(self.levels(offer), offer, self.cfg, self.span_days())
+            if niche and cost > niche[0]:
+                return f"{niche[1]}: {cost:.0f} zł > {niche[0]} zł"
         comps = self.lookup_comparables(offer)
         if comps and comps.get("estimate") and cost is not None and factor:
+            from .market import no_box_factor
+            if no_box_factor(offer, self.cfg) < 1:
+                comps = {**comps, "estimate": comps["estimate"] * no_box_factor(offer, self.cfg)}
             # 31.10: dokładnie reguła zysku przy najwyższej wycenie, jaką program przepuści (szacunek × factor -
             # enforce_profit_rule przycina do niej wycenę AI), zamiast stałych 0,9 × szacunku: przy tanich rzeczach
             # zysk ≥ 300 zł wymaga dużo niższej ceny (szacunek 500 zł → max zakup ~254 zł).
@@ -1390,6 +1398,15 @@ class OfferEvaluator:
             return False                              # finish_medians: najwyżej 3
         return bool(evaluation.get("is_deal")) or evaluation.get("score", 0) >= getattr(self.cfg, "confirm_from", 6.0)
 
+    def span_days(self):
+        comparables = getattr(self, "comparables", None)
+        return comparables.span_days() if comparables is not None and hasattr(comparables, "span_days") else None
+
+    def market_note(self, offer, levels):
+        """<rynek> dla AI: wielkość rynku, rotacja, pudełko, dodatki (sniper/market.py)."""
+        from .market import market_note
+        return market_note(levels, offer, self.cfg, self.span_days()) if levels else ""
+
     def market_hint(self, offer):
         """Dane tabeli do wiadomości: wiersze rodziny (SNIPER_AI_GUIDE_ROWS=rodzina) albo karta rynku (dawniej)."""
         category = getattr(offer, "category", None)
@@ -1410,7 +1427,8 @@ class OfferEvaluator:
                 if medians:
                     from .comparables import describe_levels
                     levels = self.levels(offer)
-                    hint, task = self.market_hint(offer) + describe_levels(levels), self.task_for(offer)
+                    hint, task = (self.market_hint(offer) + describe_levels(levels) + self.market_note(offer, levels),
+                                  self.task_for(offer))
                 evaluation, usage, attempts, photos = await self._staged(offer, comps, hint, task, medians)
                 if medians:
                     levels = self.levels(offer)             # po rozpoznaniu specyfikacji przez AI - nowe mediany
@@ -1435,7 +1453,7 @@ class OfferEvaluator:
                     evaluation.setdefault("red_flags", []).append(
                         f"Program: specyfikację ({evaluation['spec']}) rozpoznało AI ({self._spec_from_ai[offer.id]}) "
                         f"- sprawdź ją przed zakupem")
-            finish_medians(evaluation, offer, self.cfg, levels)
+            finish_medians(evaluation, offer, self.cfg, levels, self.span_days())
         else:
             enforce_profit_rule(evaluation, offer, self.cfg, comps)
             cap_without_market_data(evaluation, offer, self.guides, getattr(self.cfg, "no_data_max_score", 7.0),
@@ -1522,7 +1540,7 @@ class OfferEvaluator:
         self.__dict__.setdefault("_spec_from_ai", {})[offer.id] = found.get("source") or "AI"
         log.info("[AI] %s: specyfikacja od AI (%s: %s) - ponowna ocena z medianami po specyfikacji.", offer.id,
                  found.get("source"), spec_text(merged))
-        return (self.market_hint(offer) + describe_levels(levels) +
+        return (self.market_hint(offer) + describe_levels(levels) + self.market_note(offer, levels) +
                 f"\n\nSpecyfikacja do median (rozpoznana przez AI, źródło: {found.get('source')}): {spec_text(merged)}.")
 
     async def _call_model(self, offer, comps=None, hint=None, task=None, cfg=None):
