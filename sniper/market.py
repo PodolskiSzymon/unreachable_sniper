@@ -211,7 +211,7 @@ def demand_text(found):
     if found.get("share") is not None:
         parts.append(f"w tydzień schodzi {found['share'] * 100:.0f}% nowych ofert")
     if found.get("week") is not None:
-        parts.append(f"~{found['week']:.1f} / tydz.")
+        parts.append(f"~{found['week']:.1f} / tydz.".replace(".", ",", 1))
     if found.get("stale") is not None:
         parts.append(f"{found['stale'] * 100:.0f}% aktywnych wisi ≥ 3 tyg.")
     parts.append(f"potwierdzonych sprzedaży {found.get('n_sold', 0)}")
