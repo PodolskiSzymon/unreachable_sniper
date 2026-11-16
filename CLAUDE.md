@@ -43,6 +43,8 @@ stara kopia, nie czytać.
   order=newest_first, attribute_ids[catalog]…`); puste `price_from=` → 400, wysyłać tylko z wartością.
   Nagłówki z cURL przeglądarki (`config.CATALOG_HEADERS`); `cf_clearance`/`datadome` związane z UA.
 * Szczegóły: `www.vinted.pl/api/v2/items/{id}/details/sidebar` (`item_closing_action`: `"sold"` / `null`),
-  `/api/v2/items/{id}/shipping_details` (cena w walucie sprzedawcy!). ID nadawane przy tworzeniu – w „najnowszych”
-  bywają niższe ID (deduplikacja bez progu).
+  `/api/v2/items/{id}/shipping_details` (cena w walucie sprzedawcy!) – **od 16.11 zwraca 404 (strona HTML „La page
+  n'existe pas”) dla wszystkich ofert: czekamy na nowe API wysyłki (cURL z F12 od użytkownika)**; do tego czasu koszt
+  = cena + `SNIPER_SHIPPING_FALLBACK_PLN` (35 zł) i ostrzeżenie w alercie. ID nadawane przy tworzeniu – w
+  „najnowszych” bywają niższe ID (deduplikacja bez progu).
 * Zakup (test 03.10): „Kup teraz” → `/checkout?purchase_id=…` → „Zapłać” → `POST /api/v2/purchases/{id}/checkout/payment`.
