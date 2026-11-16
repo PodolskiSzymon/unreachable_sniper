@@ -94,6 +94,9 @@ def ai_lines(ai):
         ("Potencjalny zysk", _pln(ev.get("potential_profit_pln"))
          + (f" (marża {ev['margin_pct']:.0f}%)" if isinstance(ev.get("margin_pct"), (int, float)) else "")),
         ("Sprzedaż", f"~{ev['sell_days_estimate']} dni" if ev.get("sell_days_estimate") is not None else "?"),
+        *([("Popyt", (ev.get("market") or {})["text"] + (
+            f"; wystaw ~{_pln(ev['market']['list_price'])}" if ev["market"].get("list_price") else ""))]
+          if (ev.get("market") or {}).get("text") else []),
         *([("Polska", f"+{ev['pl_bonus']:g} do oceny (AI: {ev.get('score_ai', 0):g}/10) - szybka dostawa")]
           if ev.get("pl_bonus") else []),
         ("Do testu", "; ".join(x for x in (test_kit((ai.get("offer") or {}).get("category"),

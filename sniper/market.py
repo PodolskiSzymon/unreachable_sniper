@@ -19,8 +19,17 @@ o popycie (Pixel 10a ~9 / mies. i 38% rotacji, iPhone 8 ~520 / mies. i 7%), dlat
 4. Czytniki i tablety graficzne (LOW_DEMAND) - bez mierzenia rotacją: zawsze okazja tylko przy cenie ≤
    `SNIPER_LOW_DEMAND_MAX_SHARE` (0,3) szacunku (decyzja użytkownika: znikome zapotrzebowanie; reMarkable 2 + folio
    dostał 9-10/10 i wisi). Do tego reguła E dla AI: dodatki (folio, klawiatura) nie podnoszą wyceny ponad medianę.
+5. (2026-11-16, analyse_data/POPYT.md) Popyt zamiast rotacji, gdy comparables.db ma flagi popytu (analizator od
+   16.11): rotacja mieszała sprzedaże z usunięciami (reMarkable 24% = S23 25%). `demand` - z ofert modelu wystawionych
+   w oknie danych: ile zniknęło w tydzień (udział) i ile takich zniknięć na tydzień (kupujący), ile wisi ≥ 3 tyg.,
+   ile potwierdzonych sprzedaży → klasa gorący / normalny / wolny / martwy (kopia 07.11: iPad A16 i PS5 gorące,
+   S23, iPhone 12, Steam Deck normalne, Tab S6 Lite wolny, MatePad 11 i tablety graficzne martwe). Skutki: martwy =
+   okazja tylko ≤ `SNIPER_DEMAND_DEAD_MAX_SHARE` (0,5) szacunku (też bramka), wolny = zysk × 1,5 i ocena -1, gorący
+   = ocena +0,5 i podpowiedź ceny wystawienia; wycena AI przycinana do szacunku × 1,2 / 1,1 / 1,0 wg klasy
+   (`value_factor`). Wariant: bateria < 80% × 0,95 (telefony), gwarancja / faktura × 1,05 (`price_factor`).
 """
 import re
+import unicodedata
 
 # Stopka tekstu ogłoszenia: „bez pudełka”, „no box”, „fără cutie”… - pierwszeństwo przed wzmianką o pudełku.
 NO_BOX = re.compile(
@@ -58,6 +67,57 @@ def no_box_factor(offer, cfg):
     return factor if factor and factor < 1 and box_status(offer) == "bez" else 1.0
 
 
+def _norm(text):
+    text = unicodedata.normalize("NFKD", (text or "").lower().replace("ł", "l"))
+    return re.sub(r"\s+", " ", "".join(ch for ch in text if not unicodedata.combining(ch)))
+
+
+# Jak analyse_data/analyzer/extract.py: BATTERY (kondycja baterii w tytule / opisie).
+BATTERY_WORDS = r"(?:bateri\w*|battery|akku\w*|akum\w*|baterie|baterija|akkumulator\w*|kondycj\w*|health|zdravi\w*|" \
+                r"kapacit\w*|capacit\w*|stan baterii|zdrowie)"
+BATTERY = re.compile(BATTERY_WORDS + r"[^0-9%\n]{0,25}?(\d{2,3})\s*%|(\d{2,3})\s*%[^\n]{0,15}?" + BATTERY_WORDS)
+WARRANTY = re.compile(r"gwarancj|warranty|garanti|garanzia|zaruk|faktur|paragon|dowod zakupu|receipt|invoice")
+NO_WARRANTY = re.compile(r"(?:bez|brak|nie ma|nie posiada\w*|po)\s+(?:\w+\s+)?gwarancj|gwarancj\w*\s+(?:sie\s+)?"
+                         r"(?:skonczy|wygas)|no warranty|out of warranty|without (?:a )?(?:warranty|receipt)"
+                         r"|(?:bez|brak|nie mam)\s+(?:\w+\s+)?(?:faktur|paragon)")
+
+
+def battery_pct(offer):
+    """Kondycja baterii (40-100%) z tytułu albo opisu; None = brak informacji."""
+    for part in (getattr(offer, "title", ""), getattr(offer, "description", "")):
+        match = BATTERY.search(_norm(part))
+        if match:
+            pct = int(match.group(1) or match.group(2))
+            if 40 <= pct <= 100:
+                return pct
+    return None
+
+
+def has_warranty(offer):
+    """„Gwarancja” / faktura / paragon w ogłoszeniu (bez „bez gwarancji”, „po gwarancji”, „brak paragonu”)."""
+    text = _norm(f"{getattr(offer, 'title', '') or ''}\n{getattr(offer, 'description', '') or ''}")
+    return bool(WARRANTY.search(text)) and not NO_WARRANTY.search(text)
+
+
+def price_factor(offer, cfg):
+    """(mnożnik wyceny, opisy) z wariantu ogłoszenia: bez pudełka, słaba bateria (telefon), gwarancja / faktura."""
+    factor, notes = 1.0, []
+    box = no_box_factor(offer, cfg)
+    if box < 1:
+        factor *= box
+        notes.append(f"bez pudełka - wycena × {box:g}")
+    low = getattr(cfg, "low_battery_factor", 0.95)
+    pct = battery_pct(offer) if getattr(offer, "category", None) == "phone" and low and low < 1 else None
+    if pct is not None and pct < getattr(cfg, "low_battery_pct", 80.0):
+        factor *= low
+        notes.append(f"bateria {pct}% - schodzi wolniej i taniej, wycena × {low:g}")
+    plus = getattr(cfg, "warranty_factor", 1.05)
+    if plus and plus > 1 and has_warranty(offer):
+        factor *= plus
+        notes.append(f"gwarancja / faktura - schodzi szybciej, wycena × {plus:g}")
+    return factor, notes
+
+
 MIN_TRUSTED = 15          # od tylu ofert modelu rotacja jest wiarygodna
 
 # 2026-11-15 (użytkownik): czytników i tabletów graficznych NIE mierzymy rotacją - zapotrzebowanie na nie jest
@@ -79,6 +139,87 @@ def in_scope(offer, cfg):
     return getattr(offer, "category", None) in (scope or ())
 
 
+CLASSES = ("gorący", "normalny", "wolny", "martwy")
+CLASS_TEXT = {"gorący": "schodzi szybko", "normalny": "schodzi normalnie, przy cenie jak oferty, które zeszły",
+              "wolny": "mało kupujących - sprzedaż potrwa", "martwy": "prawie nikt nie kupuje"}
+
+
+def demand_on(offer, cfg):
+    return bool(getattr(cfg, "demand_rules", True)) and in_scope(offer, cfg)
+
+
+def demand(levels, cfg=None):
+    """Popyt modelu z poziomu median z największą liczbą świeżych ofert (flagi z analizatora od 16.11) → słownik
+    {class, share, week, stale, n_fresh, n_sold, n_clear, clear_median, median, estimate} albo None (stary plik).
+    share = udział świeżych ofert zniknionych w ≤ 7 dni, week = takich zniknięć na tydzień (~kupujący),
+    stale = udział aktywnych wiszących ≥ 3 tyg."""
+    with_data = [lv for lv in levels or [] if "n_fresh" in lv]
+    if not with_data:
+        return None
+    level = max(with_data, key=lambda lv: (lv["n_fresh"], lv["n_active"] + lv["n_gone"]))
+    fresh, gone7, days = level["n_fresh"], level["n_gone7"], level.get("fresh_days")
+    share = gone7 / fresh if fresh else None
+    week = gone7 / days * 7 if days else None
+    stale = level["n_stale"] / level["n_active"] if level["n_active"] else None
+    get = lambda name, default: getattr(cfg, name, default)  # noqa: E731
+    klass = None
+    if fresh >= get("demand_min_fresh", 6) and week is not None:
+        if share >= get("demand_hot_share", 0.5) and week >= get("demand_hot_week", 3.0):
+            klass = "gorący"
+        elif week < get("demand_dead_week", 0.7) or share < get("demand_dead_share", 0.10):
+            klass = "martwy"
+        elif week < get("demand_slow_week", 2.0) or share < get("demand_slow_share", 0.15):
+            klass = "wolny"
+        else:
+            klass = "normalny"
+    elif level["n_active"] >= 8 and stale is not None and stale >= 0.7:
+        klass = "martwy"                      # prawie nic nowego się nie pojawia, a stare oferty wiszą
+    sold = level.get("n_sold", 0)
+    if klass == "martwy" and sold >= 3:
+        klass = "wolny"                       # potwierdzone sprzedaże = ktoś jednak kupuje
+    return {"class": klass, "share": share, "week": week, "stale": stale, "n_fresh": fresh, "n_sold": sold,
+            "n_clear": level.get("n_clear", 0), "clear_median": level.get("clear_median"),
+            "median": level.get("median"), "estimate": level.get("estimate")}
+
+
+def value_factor(levels, offer, cfg):
+    """Do ilu × szacunku z danych program przepuszcza wycenę AI: gorący = SNIPER_AI_COMPARABLE_FACTOR (1,2), normalny
+    i bez klasy = SNIPER_DEMAND_NORMAL_FACTOR (1,1), wolny / martwy / czytnik = SNIPER_DEMAND_SLOW_FACTOR (1,0).
+    Stary plik (bez flag popytu) i kategorie poza zasięgiem - jak dawniej."""
+    base = getattr(cfg, "comparable_factor", 1.2)
+    if not base:
+        return base
+    slow = min(base, getattr(cfg, "demand_slow_factor", 1.0) or base)
+    if low_demand(offer) and getattr(cfg, "demand_rules", True):
+        return slow
+    found = demand(levels, cfg) if demand_on(offer, cfg) else None
+    if found is None:
+        return base
+    klass = found["class"]
+    if klass == "gorący":
+        return base
+    if klass in ("wolny", "martwy"):
+        return slow
+    return min(base, getattr(cfg, "demand_normal_factor", 1.1) or base)
+
+
+def demand_text(found):
+    """Jedna linia o popycie (alert, <rynek>)."""
+    if not found:
+        return ""
+    parts = []
+    if found.get("share") is not None:
+        parts.append(f"w tydzień schodzi {found['share'] * 100:.0f}% nowych ofert")
+    if found.get("week") is not None:
+        parts.append(f"~{found['week']:.1f} / tydz.")
+    if found.get("stale") is not None:
+        parts.append(f"{found['stale'] * 100:.0f}% aktywnych wisi ≥ 3 tyg.")
+    parts.append(f"potwierdzonych sprzedaży {found.get('n_sold', 0)}")
+    klass = found.get("class")
+    head = f"{klass} ({CLASS_TEXT[klass]})" if klass else "za mało nowych ofert, by ocenić"
+    return f"{head}: " + ", ".join(parts)
+
+
 def niche_reason(market, cfg):
     """Opis niszy albo None. Nisza = bardzo niska rotacja przy wiarygodnej próbce, albo prawie brak ofert
     i niska rotacja."""
@@ -97,9 +238,16 @@ def niche_reason(market, cfg):
 def niche_limit(levels, offer, cfg, span_days=None):
     """Nisza → (max cena zakupu, opis) dla bramki przed AI; None, gdy rynek wystarczający / brak danych /
     kategoria poza zasięgiem reguły."""
+    found = demand(levels, cfg) if demand_on(offer, cfg) else None
     if low_demand(offer) and getattr(cfg, "low_demand_max_share", 0.3):
         share = getattr(cfg, "low_demand_max_share", 0.3)
         reason = "czytnik / tablet graficzny - znikome zapotrzebowanie"
+    elif found is not None:
+        # Plik z flagami popytu: limit tylko dla klasy „martwy” (rotacja nie decyduje).
+        share = getattr(cfg, "demand_dead_max_share", 0.5)
+        if found["class"] != "martwy" or not share:
+            return None
+        reason = "martwy popyt - " + demand_text(found)
     else:
         share = getattr(cfg, "niche_max_share", 0.5)
         market = liquidity(levels, span_days)
@@ -111,7 +259,7 @@ def niche_limit(levels, offer, cfg, span_days=None):
     estimates = [lv["estimate"] for lv in levels if lv.get("estimate")]
     if not estimates:
         return None
-    estimate = max(estimates) * no_box_factor(offer, cfg)
+    estimate = max(estimates) * price_factor(offer, cfg)[0]
     return (round(estimate * share),
             f"{reason}; okazja tylko przy cenie ≤ {share * 100:.0f}% szacunku sprzedaży ({estimate:.0f} zł)")
 
@@ -119,10 +267,16 @@ def niche_limit(levels, offer, cfg, span_days=None):
 def market_note(levels, offer, cfg, span_days=None):
     """Dodatek do <mediany> dla AI: wielkość rynku, rotacja, pudełko, dodatki."""
     lines = []
-    market = liquidity(levels, span_days) if in_scope(offer, cfg) and not low_demand(offer) else None
+    found = demand(levels, cfg) if demand_on(offer, cfg) and not low_demand(offer) else None
+    market = liquidity(levels, span_days) if in_scope(offer, cfg) and not low_demand(offer) and found is None \
+        else None
     if low_demand(offer):
         lines.append("Czytnik / tablet graficzny: znikome zapotrzebowanie na rynku - sprzedaż trwa długo; okazja tylko "
                      "przy cenie dużo niższej od mediany.")
+    if found:
+        lines.append("Popyt na ten model: " + demand_text(found) + ". Szacunek szybkiej sprzedaży w medianach to cena "
+                     "ofert, które zeszły (≤ 3 dni od wystawienia albo potwierdzona sprzedaż), a nie mediana aktywnych "
+                     "(te często wiszą za drogo) - nie wyceniaj wyżej bez wyraźnego powodu.")
     if market:
         lines.append(f"Rynek tego modelu: ~{market['month']:.0f} ofert na miesiąc, zniknęło (sprzedane / usunięte) "
                      f"{market['turnover'] * 100:.0f}% - im mniej ofert i niższa rotacja, tym dłużej się sprzedaje.")
@@ -132,6 +286,9 @@ def market_note(levels, offer, cfg, span_days=None):
                      f"liczy wycenę × {getattr(cfg, 'no_box_factor', 0.88):g}.")
     elif box == "jest":
         lines.append("Ogłoszenie: z pudełkiem / kompletem - zwykle szybsza sprzedaż, cena jak mediana (nie wyżej).")
+    for note in price_factor(offer, cfg)[1]:
+        if not note.startswith("bez pudełka"):
+            lines.append("Ogłoszenie: " + note + ".")
     lines.append("Dodatki (etui, klawiatura / folio, ładowarka, folia, rysik do czytnika) nie podnoszą ceny odsprzedaży "
                  "ponad medianę - najwyżej przyspieszają sprzedaż. Wyjątek: oryginalny rysik / klawiatura Apple do "
                  "iPada (osobno sprzedawalne) - najwyżej +10% mediany.")
@@ -149,6 +306,9 @@ def apply_market_rules(ev, offer, cfg, levels, span_days=None):
         ev["score_ai"] = ev.get("score_ai", ev["score"])
         ev.update(is_deal=False, score=min(ev["score"], 6.0))
         flags.append(f"Program: {limit[1]}; cena {cost:.0f} zł > {limit[0]} zł - trudno sprzedać, nie okazja")
+    found = demand(levels, cfg) if demand_on(offer, cfg) and not low_demand(offer) else None
+    if found is not None:
+        return _apply_demand(ev, offer, cfg, levels, found, cost)
     market = liquidity(levels, span_days)
     if market is None or not in_scope(offer, cfg) or low_demand(offer):
         return ev
@@ -161,4 +321,50 @@ def apply_market_rules(ev, offer, cfg, levels, span_days=None):
         ev["score"] = max(1.0, ev["score"] - 1)
         flags.append(f"Program: wolna rotacja - zniknęło tylko {market['turnover'] * 100:.0f}% ofert tego modelu "
                      f"(próg {minimum_turnover * 100:.0f}%), sprzedaż może potrwać; ocena -1")
+    return ev
+
+
+def list_price(levels, ev, offer, cfg, found):
+    """Podpowiedź ceny wystawienia przy odsprzedaży: gorący - do mediany aktywnych (schodzi i tak), inne - szacunek
+    (cena ofert, które zeszły). Z poziomu wybranego przez AI (median_used), × wariant ogłoszenia."""
+    used = ev.get("median_used")
+    comps = levels[used - 1] if isinstance(used, int) and 1 <= used <= len(levels) else (levels[0] if levels else {})
+    estimate = comps.get("estimate")
+    if not estimate:
+        return None
+    price = max(estimate, comps.get("median") or 0) if found.get("class") == "gorący" else estimate
+    return round(price * price_factor(offer, cfg)[0] / 10) * 10
+
+
+def _apply_demand(ev, offer, cfg, levels, found, cost):
+    """Skutki klasy popytu po regule zysku (martwy obsłużył już niche_limit)."""
+    from .evaluator import rule_required_profit
+
+    flags = ev.setdefault("red_flags", [])
+    klass = found["class"]
+    ev["market"] = {"class": klass, "share7_pct": None if found["share"] is None else round(found["share"] * 100),
+                    "week": None if found["week"] is None else round(found["week"], 1),
+                    "stale_pct": None if found["stale"] is None else round(found["stale"] * 100),
+                    "sold": found["n_sold"], "box": box_status(offer), "text": demand_text(found),
+                    "list_price": list_price(levels, ev, offer, cfg, found)}
+    if klass == "wolny":
+        times = getattr(cfg, "demand_slow_profit", 1.5) or 1.0
+        value, profit = ev.get("market_value_pln"), ev.get("potential_profit_pln")
+        required = None
+        if value and profit is not None:
+            required = rule_required_profit(profit / value, cfg, value)
+        if ev.get("is_deal") and times > 1 and required is not None and profit < required * times:
+            ev["score_ai"] = ev.get("score_ai", ev["score"])
+            ev.update(is_deal=False, score=min(ev["score"], 6.0))
+            flags.append(f"Program: wolny popyt ({demand_text(found)}) - wymagany zysk × {times:g} = "
+                         f"{required * times:.0f} zł, a jest {profit:.0f} zł - nie okazja")
+        elif ev.get("score", 0) > 1:
+            ev["score_ai"] = ev.get("score_ai", ev["score"])
+            ev["score"] = max(1.0, ev["score"] - 1)
+            flags.append(f"Program: wolny popyt ({demand_text(found)}) - sprzedaż potrwa; ocena -1")
+    elif klass == "gorący" and ev.get("is_deal"):
+        bonus = getattr(cfg, "demand_hot_bonus", 0.5) or 0
+        if bonus:
+            ev["score_ai"] = ev.get("score_ai", ev["score"])
+            ev["score"] = min(10.0, ev["score"] + bonus)
     return ev

@@ -417,6 +417,34 @@ class AiConfig:
     market_categories: tuple = field(default_factory=lambda: tuple(
         c.strip() for c in _env("SNIPER_MARKET_CATEGORIES", "phone,tablet,console").split(",") if c.strip()))
     no_box_factor: float = _env_float("SNIPER_NO_BOX_FACTOR", 0.88)
+    # 2026-11-16 (analyse_data/POPYT.md, sniper/market.py: demand): klasa popytu z comparables.db z flagami popytu
+    # (analizator od 16.11) zamiast rotacji. Z ofert modelu wystawionych w oknie analizatora: udział, który zniknął
+    # w tydzień (share), i ile takich zniknięć na tydzień (week, ~liczba kupujących). gorący: share ≥ HOT_SHARE i week
+    # ≥ HOT_WEEK; martwy: week < DEAD_WEEK albo share < DEAD_SHARE; wolny: week < SLOW_WEEK albo share < SLOW_SHARE;
+    # reszta normalny. Mniej niż MIN_FRESH świeżych ofert: martwy, gdy ≥ 70% aktywnych wisi ≥ 3 tyg., inaczej bez
+    # klasy. ≥ 3 potwierdzone sprzedaże podnoszą „martwy” do „wolny”. Tylko market_categories; czytniki - jak wyżej.
+    demand_rules: bool = _env_bool("SNIPER_DEMAND_RULES", True)
+    demand_min_fresh: int = _env_int("SNIPER_DEMAND_MIN_FRESH", 6)
+    demand_hot_share: float = _env_float("SNIPER_DEMAND_HOT_SHARE", 0.5)
+    demand_hot_week: float = _env_float("SNIPER_DEMAND_HOT_WEEK", 3.0)
+    demand_slow_share: float = _env_float("SNIPER_DEMAND_SLOW_SHARE", 0.15)
+    demand_slow_week: float = _env_float("SNIPER_DEMAND_SLOW_WEEK", 2.0)
+    demand_dead_share: float = _env_float("SNIPER_DEMAND_DEAD_SHARE", 0.10)
+    demand_dead_week: float = _env_float("SNIPER_DEMAND_DEAD_WEEK", 0.7)
+    # Skutki klas: martwy = okazja tylko ≤ DEAD_MAX_SHARE × szacunek (też bramka przed AI); wolny = wymagany zysk
+    # × SLOW_PROFIT i ocena -1; gorący = ocena + HOT_BONUS. Wycena AI najwyżej szacunek × comparable_factor (gorący),
+    # × NORMAL_FACTOR (normalny / bez klasy), × SLOW_FACTOR (wolny, martwy, czytniki).
+    demand_dead_max_share: float = _env_float("SNIPER_DEMAND_DEAD_MAX_SHARE", 0.5)
+    demand_slow_profit: float = _env_float("SNIPER_DEMAND_SLOW_PROFIT", 1.5)
+    demand_hot_bonus: float = _env_float("SNIPER_DEMAND_HOT_BONUS", 0.5)
+    demand_normal_factor: float = _env_float("SNIPER_DEMAND_NORMAL_FACTOR", 1.1)
+    demand_slow_factor: float = _env_float("SNIPER_DEMAND_SLOW_FACTOR", 1.0)
+    # Wariant w wycenie (dane 07.11): iPhone z baterią < 80% schodzi wolniej i taniej (27% vs 34-36% w tydzień) →
+    # wycena × LOW_BATTERY_FACTOR (tylko telefony); „gwarancja” / faktura / paragon schodzą szybciej i drożej
+    # (38% vs 29%, cena 0,96 vs 0,89 mediany) → × WARRANTY_FACTOR. 1 = wyłączone.
+    low_battery_pct: float = _env_float("SNIPER_LOW_BATTERY_PCT", 80.0)
+    low_battery_factor: float = _env_float("SNIPER_LOW_BATTERY_FACTOR", 0.95)
+    warranty_factor: float = _env_float("SNIPER_WARRANTY_FACTOR", 1.05)
 
     # Mail tylko gdy ocena >= min_score; notify_all=true -> mail o każdej ofercie (z oceną albo bez).
     min_score: float = _env_float("SNIPER_AI_MIN_SCORE", 7.0)

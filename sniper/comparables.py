@@ -8,7 +8,16 @@ Dopasowanie (bez sieci, kilka ms na ofertę, tylko do odczytu):
   * pozostałe znaczące słowa (rzadkie w bazie - „telefon”, „stan”, „sprzedam” odpadają same) - co najmniej 60%,
   * ta sama kategoria; wynik tylko przy ≥ `min_offers` ofertach.
 Szacunek sprzedaży jak w analizatorze: wyższa z (mediana zniknięć przy ≥ 10, środek p25–mediana aktywnych).
+
+Popyt (2026-11-16, analyse_data/POPYT.md - reMarkable 2 kupiony za 1200, sprzedany za 1400; iPad A16 w 24 h): gdy
+plik ma flagi popytu (analizator od 16.11, meta `demand`), szacunek = cena, po której oferty NAPRAWDĘ schodzą -
+mediana ofert, które zniknęły w ≤ 3 dni albo są potwierdzoną sprzedażą (`apply_clearing`). Mediana aktywnych jest
+zawyżona przez oferty wiszące tygodniami: potwierdzone sprzedaże ≤ 7 dni mają cenę 0,82 × mediana aktywnych, szybkie
+zniknięcia 0,88, a dawny szacunek ~0,90-0,95 (reMarkable 2: 1375 → ~1100-1180, iPhone 12: 588 → 530, S23 bez
+zmian, iPad A16 bez zmian). Do tego liczby do klasy popytu (sniper/market.py: `demand`): świeże oferty, ile z nich
+zniknęło w tydzień, ile wisi ≥ 3 tygodnie, okno dni (`fresh_days`).
 """
+import json
 import logging
 import math
 import re
@@ -180,6 +189,14 @@ class Comparables:
             self._cond = "cond" in [c[0] for c in self._conn.execute("SELECT * FROM offers LIMIT 0").description]
             self._spec_cond = self._specs and "cond" in [
                 c[1] for c in self._conn.execute("PRAGMA table_info(laptop_specs)")]
+            # Popyt (analizator od 2026-11-16): flagi fast / sold / fresh / gone7 / stale + okno świeżych ofert.
+            columns = [c[0] for c in self._conn.execute("SELECT * FROM offers LIMIT 0").description]
+            self._demand = all(c in columns for c in DEMAND_COLUMNS)
+            row = self._conn.execute("SELECT value FROM meta WHERE key = 'fresh_days'").fetchone()
+            try:
+                self._fresh_days = json.loads(row[0]) if row else {}
+            except (ValueError, TypeError):
+                self._fresh_days = {}
             log.info("[AI] Porównywalne oferty: %s (%d ofert)", self.path, self._rows)
         return self._conn
 
@@ -336,6 +353,11 @@ class Comparables:
                     out.append({**found, "label": label + note + state, "condition": group})
                 if out:
                     break
+            if getattr(self, "_demand", False) and category in CLEARING_CATEGORIES:
+                days = (getattr(self, "_fresh_days", None) or {}).get(category)
+                for lv in out:
+                    lv["fresh_days"] = days
+                apply_clearing(out)
             return out
         except sqlite3.Error as exc:
             log.warning("[AI] Porównywalne oferty niedostępne: %s", exc)
@@ -357,31 +379,99 @@ class Comparables:
         need = math.ceil(WORD_SHARE * len(informative)) if informative else 0
         plain_info = {_plain(w) for w in informative}
         active, gone = [], []
-        sql = "SELECT words, price, gone FROM offers WHERE offers MATCH ? AND category = ?"
+        with_demand = getattr(self, "_demand", False)
+        demand = {"clear": [], "sold": [], "fast": 0, "fresh": 0, "gone7": 0, "stale": 0} if with_demand else None
+        columns = "words, price, gone" + (", " + ", ".join(DEMAND_COLUMNS) if with_demand else "")
+        sql = f"SELECT {columns} FROM offers WHERE offers MATCH ? AND category = ?"
         params = [query, category]
         if group:
             sql += " AND cond = ?"
             params.append(group)
-        for words, price, was_gone in db.execute(sql + " ORDER BY rank LIMIT 2000", params):
+        for row in db.execute(sql + " ORDER BY rank LIMIT 2000", params):
+            words, price, was_gone = row[:3]
             have = {_plain(w) for w in words.split()}
             if len(plain_info & have) < need:
                 continue
             (gone if was_gone else active).append(price)
+            if demand is not None:
+                fast, sold, fresh, gone7, stale = row[3:8]
+                if fast or sold:
+                    demand["clear"].append(price)
+                if sold:
+                    demand["sold"].append(price)
+                demand["fast"] += bool(fast)
+                demand["fresh"] += bool(fresh)
+                demand["gone7"] += bool(gone7)
+                demand["stale"] += bool(stale)
         if len(active) + len(gone) < self.min_offers:
             return None
         shown = [w.strip('"()') for w in [*required, *variants, *informative]]
-        return {"words": shown, **_stats(active, gone)}
+        return {"words": shown, **_stats(active, gone, demand)}
 
 
-def _stats(active, gone):
+def _stats(active, gone, demand=None):
     """Statystyki grupy: p25 / mediana / p75 aktywnych, mediana zniknięć (≥ 10) i szacunek szybkiej sprzedaży
-    (wyższa z: mediana zniknięć, środek p25–mediana) - jak w analizatorze."""
+    (wyższa z: mediana zniknięć, środek p25–mediana) - jak w analizatorze. Z flagami popytu (`demand`) dodatkowo
+    ceny ofert, które zeszły (szybkie zniknięcia + potwierdzone sprzedaże), i liczby do klasy popytu; ostateczny
+    szacunek liczy wtedy `apply_clearing` (potrzebuje wszystkich poziomów)."""
     p25, med, p75 = _pct(active, .25), _pct(active, .5), _pct(active, .75)
     gone_med = _pct(gone, .5) if len(gone) >= 10 else None
     mid = (p25 + med) / 2 if active else None
     estimate = max(x for x in (gone_med, mid) if x is not None) if (gone_med or mid) else None
-    return {"n_active": len(active), "n_gone": len(gone), "p25": p25, "median": med, "p75": p75,
-            "gone_median": gone_med, "estimate": estimate}
+    out = {"n_active": len(active), "n_gone": len(gone), "p25": p25, "median": med, "p75": p75,
+           "gone_median": gone_med, "estimate": estimate}
+    if demand is not None:
+        clear = demand["clear"]
+        out.update(estimate_old=estimate, n_clear=len(clear), clear_median=_pct(clear, .5),
+                   n_sold=len(demand["sold"]), sold_median=_pct(demand["sold"], .5) if len(demand["sold"]) >= 3
+                   else None, n_fast=demand["fast"], n_fresh=demand["fresh"], n_gone7=demand["gone7"],
+                   n_stale=demand["stale"])
+    return out
+
+
+DEMAND_COLUMNS = ("fast", "sold", "fresh", "gone7", "stale")
+# Wycena ceną zejścia i klasy popytu tylko tu (decyzja użytkownika 15.11: podzespoły i laptopy - mało ofert na model,
+# a schodzą; laptopy mają własne mediany po specyfikacji).
+CLEARING_CATEGORIES = ("phone", "tablet", "console")
+MIN_CLEAR = 5            # od tylu ofert, które zeszły, ich mediana jest szacunkiem poziomu
+CLEAR_RATIO_LIMITS = (0.5, 1.05)
+
+
+def apply_clearing(levels):
+    """Szacunek = cena, po której oferty schodzą (2026-11-16, POPYT.md). Dla każdego poziomu:
+      * ≥ MIN_CLEAR ofert, które zeszły → ich mediana,
+      * mniej → najniższa z: dawny szacunek, mediana zeszłych (przy ≥ 3), mediana aktywnych × współczynnik
+        zejścia modelu (zeszłe / aktywne na poziomie z największą liczbą zeszłych), a bez współczynnika p25 aktywnych
+        (mało danych o sprzedaży = ostrożnie),
+      * nigdy wyżej niż wyższa z (dawny szacunek, mediana aktywnych).
+    Poziomy bez flag (stary plik) zostają bez zmian. → ta sama lista (zmieniona w miejscu)."""
+    with_data = [lv for lv in levels if "n_clear" in lv]
+    if not with_data:
+        return levels
+    widest = max(with_data, key=lambda lv: (lv["n_clear"], lv["n_active"] + lv["n_gone"]))
+    ratio = None
+    if widest["n_clear"] >= MIN_CLEAR and widest.get("median") and widest.get("clear_median"):
+        low, high = CLEAR_RATIO_LIMITS
+        ratio = min(max(widest["clear_median"] / widest["median"], low), high)
+    for lv in with_data:
+        old = lv.get("estimate_old")
+        if lv["n_clear"] >= MIN_CLEAR and lv.get("clear_median"):
+            estimate, basis = lv["clear_median"], f"mediana {lv['n_clear']} ofert, które zeszły"
+        else:
+            options = [(old, "dawny szacunek (mało danych o sprzedaży)")]
+            if lv["n_clear"] >= 3 and lv.get("clear_median"):
+                options.append((lv["clear_median"], f"mediana {lv['n_clear']} ofert, które zeszły"))
+            if ratio and lv.get("median"):
+                options.append((ratio * lv["median"], f"mediana aktywnych × {ratio:.2f} (tyle schodzi ten model)"))
+            elif lv.get("p25"):
+                options.append((lv["p25"], "p25 aktywnych (mało danych o sprzedaży)"))
+            options = [o for o in options if o[0]]
+            if not options:
+                continue
+            estimate, basis = min(options, key=lambda o: o[0])
+        caps = [x for x in (old, lv.get("median")) if x]
+        lv.update(estimate=min(estimate, max(caps)) if caps else estimate, estimate_basis=basis, clear_ratio=ratio)
+    return levels
 
 
 def describe_levels(levels):
@@ -392,8 +482,8 @@ def describe_levels(levels):
     lines = [f"{i}. {lv['label']} ({'specyfikacja' if lv.get('kind') == 'spec' else 'słowa'}: "
              f"{' '.join(lv['words'])}): aktywnych {lv['n_active']} - p25 "
              f"{zl(lv['p25'])}, mediana {zl(lv['median'])}, p75 {zl(lv['p75'])} zł; zniknęło {lv['n_gone']} "
-             f"(mediana {zl(lv['gone_median'])} zł); szacunek szybkiej sprzedaży ~{zl(lv['estimate'])} zł"
-             for i, lv in enumerate(levels, 1)]
+             f"(mediana {zl(lv['gone_median'])} zł)" + _clear_text(lv, zl) +
+             f"; szacunek szybkiej sprzedaży ~{zl(lv['estimate'])} zł" for i, lv in enumerate(levels, 1)]
     return "\n\n<mediany>\n" + "\n".join(lines) + "\n</mediany>"
 
 
@@ -427,6 +517,15 @@ def _spec_label(spec, cols):
     return text + graphics + suffix
 
 
+def _clear_text(lv, zl):
+    """Fragment opisu poziomu: ile ofert zeszło (≤ 3 dni / potwierdzona sprzedaż) i po ile."""
+    if "n_clear" not in lv:
+        return ""
+    sold = f", w tym potwierdzonych sprzedaży {lv['n_sold']}" if lv.get("n_sold") else ""
+    return (f"; zeszło (≤ 3 dni od wystawienia albo potwierdzona sprzedaż) {lv['n_clear']}{sold}"
+            + (f" - mediana {zl(lv['clear_median'])} zł" if lv.get("clear_median") else ""))
+
+
 def describe(found):
     """Tekst dla modelu (<porownywalne>) - liczby z bazy, nie zgadywane."""
     if not found:
@@ -434,6 +533,7 @@ def describe(found):
     zl = lambda v: "-" if v is None else f"{v:,.0f}".replace(",", " ")  # noqa: E731
     return (f"\n\n<porownywalne>\nPodobne oferty z bazy rynku (słowa: {' '.join(found['words'])}): aktywnych "
             f"{found['n_active']} (p25 {zl(found['p25'])}, mediana {zl(found['median'])}, p75 {zl(found['p75'])} zł), "
-            f"zniknęło {found['n_gone']} (mediana {zl(found['gone_median'])} zł) → szacunek szybkiej sprzedaży "
+            f"zniknęło {found['n_gone']} (mediana {zl(found['gone_median'])} zł){_clear_text(found, zl)} → szacunek "
+            f"szybkiej sprzedaży "
             f"~{zl(found['estimate'])} zł. Dopasowanie po słowach tytułu - sprawdź, czy to ten sam model i wariant; "
             f"bez wyraźnego powodu nie wyceniaj wyżej.\n</porownywalne>")

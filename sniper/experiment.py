@@ -153,7 +153,7 @@ def cheap_guard(ev, offer, cost, sale):
 def finish_medians(ev, offer, cfg, levels, span_days=None):
     """Program po AI: brak w medianach → nie okazja; reguła zysku i przycięcie do wybranej mediany; premia PL;
     reguły rynku (sniper/market.py: „bez pudełka” taniej, mały rynek, wolna rotacja)."""
-    from .market import apply_market_rules, no_box_factor
+    from .market import apply_market_rules, price_factor, value_factor
     if not levels or not ev.get("in_medians"):
         if ev.get("is_deal") or ev["score"] > 3:
             ev["score_ai"] = ev["score"]
@@ -162,14 +162,17 @@ def finish_medians(ev, offer, cfg, levels, span_days=None):
         return ev
     used = ev.get("median_used")
     comps = levels[used - 1] if used and 1 <= used <= len(levels) else levels[0]
-    factor = no_box_factor(offer, cfg)
-    if factor < 1:
-        # Bez pudełka: mediany (głównie z pudełkiem albo bez informacji) × factor - przycięcie i zysk od niższej ceny.
+    factor, notes = price_factor(offer, cfg)
+    if factor != 1:
+        # Wariant ogłoszenia (bez pudełka, słaba bateria, gwarancja / faktura): szacunek z median × factor - przycięcie
+        # i zysk od niego; niższy mnożnik obniża też wycenę AI (ta zwykle nie uwzględnia wariantu).
         if comps.get("estimate"):
             comps = {**comps, "estimate": comps["estimate"] * factor}
-        if ev.get("market_value_pln"):
+        if factor < 1 and ev.get("market_value_pln"):
             ev["market_value_pln"] = round(ev["market_value_pln"] * factor)
-        ev.setdefault("red_flags", []).append(f"Program: bez pudełka - wycena × {factor:g}")
+        ev.setdefault("red_flags", []).extend(f"Program: {note}" for note in notes)
+    # Popyt (2026-11-16): wycena AI najwyżej szacunek × 1,2 / 1,1 / 1,0 wg klasy popytu modelu.
+    comps = {**comps, "factor": value_factor(levels, offer, cfg)}
     enforce_profit_rule(ev, offer, cfg, comps)
     apply_pl_bonus(ev, offer, getattr(cfg, "pl_bonus", 0))
     apply_market_rules(ev, offer, cfg, levels, span_days)

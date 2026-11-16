@@ -411,7 +411,8 @@ def enforce_profit_rule(evaluation, offer, cfg, comps=None):
     AI jest przycinana do szacunku z danych × SNIPER_AI_COMPARABLE_FACTOR (domyślnie 1,2)."""
     from .extractor import purchase_cost
     value, cost = evaluation.get("market_value_pln"), purchase_cost(offer)
-    factor = getattr(cfg, "comparable_factor", 1.2)
+    # comps["factor"] - mnożnik wg klasy popytu (sniper/market.py: value_factor); bez niego jak dawniej.
+    factor = (comps or {}).get("factor") or getattr(cfg, "comparable_factor", 1.2)
     if value and comps and comps.get("estimate") and factor and value > comps["estimate"] * factor:
         capped = round(comps["estimate"] * factor)
         evaluation.setdefault("red_flags", []).append(
@@ -1156,9 +1157,12 @@ class OfferEvaluator:
                 return f"{niche[1]}: {cost:.0f} zł > {niche[0]} zł"
         comps = self.lookup_comparables(offer)
         if comps and comps.get("estimate") and cost is not None and factor:
-            from .market import no_box_factor
-            if no_box_factor(offer, self.cfg) < 1:
-                comps = {**comps, "estimate": comps["estimate"] * no_box_factor(offer, self.cfg)}
+            from .market import price_factor, value_factor
+            if self.uses_medians(offer):
+                factor = value_factor(self.levels(offer), offer, self.cfg)   # wg klasy popytu (2026-11-16)
+            variant = price_factor(offer, self.cfg)[0]
+            if variant != 1:
+                comps = {**comps, "estimate": comps["estimate"] * variant}
             # 31.10: dokładnie reguła zysku przy najwyższej wycenie, jaką program przepuści (szacunek × factor -
             # enforce_profit_rule przycina do niej wycenę AI), zamiast stałych 0,9 × szacunku: przy tanich rzeczach
             # zysk ≥ 300 zł wymaga dużo niższej ceny (szacunek 500 zł → max zakup ~254 zł).

@@ -41,6 +41,11 @@ def build_deal_message(offer, evaluation, topic, priority=5, attach_photo=True):
                      f"{_pln(ev.get('potential_profit_pln'))}{margin}{days}")
         if ev.get("market_value_pln") is not None:
             lines.append(f"Sprzedam za ~{_pln(ev.get('market_value_pln'))}")
+    market = ev.get("market") or {}
+    if market.get("text"):
+        # Popyt (2026-11-16): klasa modelu z danych i cena wystawienia, po której schodzi.
+        hint = f" → wystaw ~{_pln(market['list_price'])}" if market.get("list_price") else ""
+        lines.append(f"Popyt: {market['text']}{hint}")
     if ev.get("pl_bonus"):
         lines.append(f"Sprzedawca z Polski: +{ev['pl_bonus']:g} do oceny (szybka dostawa)")
     kit = test_kit(offer.get("category"), offer.get("title"))
