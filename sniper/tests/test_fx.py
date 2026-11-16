@@ -49,8 +49,25 @@ def test_refresh_updates_shipping_conversion(monkeypatch):
 
 
 def test_missing_shipping_caps_score():
+    """Opcjonalny limit oceny (SNIPER_NO_SHIPPING_MAX_SCORE, np. 7 jak przed 16.11)."""
     offer = laptop()
     offer.shipping = None
-    ev = cap_without_shipping({"score": 9.0, "is_deal": True}, offer)
-    assert ev["score"] == 7.0 and ev["score_ai"] == 9.0 and "brak kosztu wysyłki" in ev["red_flags"][-1]
+    ev = cap_without_shipping({"score": 9.0, "is_deal": True}, offer, cap=7.0)
+    assert ev["score"] == 7.0 and ev["score_ai"] == 9.0 and "nie podał kosztu wysyłki" in ev["red_flags"][-1]
     assert cap_without_shipping({"score": 9.0, "is_deal": True}, laptop())["score"] == 9.0
+
+
+def test_missing_shipping_still_alerts_with_estimate():
+    """16.11: shipping_details zwraca 404 dla wszystkich ofert - alert dalej idzie, koszt z szacunkiem wysyłki,
+    w ntfy ostrzeżenie."""
+    from sniper.config import SHIPPING_FALLBACK_PLN
+    from sniper.extractor import build_offer, purchase_cost
+    from sniper.push import build_deal_message
+    from sniper.tests.test_scout import FIX
+    offer = build_offer(10775259629, FIX["sidebar_active"], None)
+    assert offer.shipping is None and offer.total_price == offer.price + SHIPPING_FALLBACK_PLN
+    assert purchase_cost(offer) > offer.price + SHIPPING_FALLBACK_PLN           # + opłata Vinted
+    ev = cap_without_shipping({"score": 9.0, "is_deal": True}, offer)
+    assert ev["score"] == 9.0 and ev["shipping_assumed"] == SHIPPING_FALLBACK_PLN
+    message = build_deal_message(offer.to_dict(), ev, "t")["message"]
+    assert "Wysyłka nieznana" in message and f"przyjęto ~{SHIPPING_FALLBACK_PLN:.0f} zł" in message

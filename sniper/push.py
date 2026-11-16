@@ -34,6 +34,10 @@ def build_deal_message(offer, evaluation, topic, priority=5, attach_photo=True):
     title += f" ({category}): " if category else ": "
     title += offer.get("title") or "?"
     lines = [f"{_pln(purchase_cost(offer))} z wysyłką i opłatą Vinted (cena {_pln(offer.get('price'))})"]
+    if ev.get("shipping_assumed") is not None:
+        assumed = ev["shipping_assumed"]
+        lines.append("⚠ Wysyłka nieznana (Vinted nie podał) - " + (f"przyjęto ~{_pln(assumed)}" if assumed else
+                     "koszt bez wysyłki") + "; sprawdź w ofercie, z zagranicy bywa > 100 zł")
     if ev.get("max_buy_price_pln") is not None or ev.get("potential_profit_pln") is not None:
         margin = f" ({ev['margin_pct']:.0f}%)" if isinstance(ev.get("margin_pct"), (int, float)) else ""
         days = f", sprzedaż ~{ev['sell_days_estimate']} dni" if ev.get("sell_days_estimate") is not None else ""

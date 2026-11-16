@@ -238,7 +238,7 @@ def offer_text(offer):
     """Dane oferty dla modelu - te same pola co w mailu."""
     ship = offer.shipping
     if ship is None:
-        shipping = "brak danych"
+        shipping = "brak danych (Vinted nie podał - program przyjął szacunek w koszcie zakupu)"
     elif ship.free_shipping:
         shipping = "darmowa"
     elif ship.pickup_only:
@@ -496,15 +496,22 @@ def cap_impossible_variant(evaluation, offer, cap=7.0):
     return evaluation
 
 
-def cap_without_shipping(evaluation, offer, cap=7.0):
-    """Brak kosztu wysyłki (shipping_details nie przyszło) = koszt zaniżony - z zagranicy wysyłka bywa > 100 zł
-    (użytkownik 2026-10-30) → ocena najwyżej `cap`, z flagą do ręcznego sprawdzenia."""
-    if getattr(offer, "shipping", None) is not None or evaluation["score"] <= cap:
+def cap_without_shipping(evaluation, offer, cap=10.0):
+    """Brak kosztu wysyłki (shipping_details nie przyszło). Do 16.11 ocena najwyżej 7 (z zagranicy wysyłka bywa
+    > 100 zł, użytkownik 2026-10-30) - ale gdy Vinted przestał podawać wysyłkę dla wszystkich ofert, nie byłoby
+    żadnych alertów. Teraz koszt zawiera szacunek SNIPER_SHIPPING_FALLBACK_PLN (extractor.build_offer), alert idzie
+    z ostrzeżeniem (`shipping_assumed`), a limit oceny `cap` (SNIPER_NO_SHIPPING_MAX_SCORE) jest opcjonalny."""
+    from .config import SHIPPING_FALLBACK_PLN
+    if getattr(offer, "shipping", None) is not None:
         return evaluation
-    evaluation.setdefault("score_ai", evaluation["score"])
-    evaluation["score"] = float(cap)
+    assumed = SHIPPING_FALLBACK_PLN if getattr(offer, "total_price", None) is not None else 0
+    evaluation["shipping_assumed"] = assumed
+    note = (f"w koszcie przyjęto ~{assumed:.0f} zł" if assumed else "koszt liczony bez wysyłki")
     evaluation.setdefault("red_flags", []).append(
-        f"Program: brak kosztu wysyłki - koszt bez wysyłki, ocena najwyżej {cap:g}; sprawdź wysyłkę w ofercie")
+        f"Program: Vinted nie podał kosztu wysyłki - {note}; sprawdź wysyłkę w ofercie (z zagranicy bywa > 100 zł)")
+    if cap and cap < 10 and evaluation["score"] > cap:
+        evaluation.setdefault("score_ai", evaluation["score"])
+        evaluation["score"] = float(cap)
     return evaluation
 
 
@@ -1463,7 +1470,7 @@ class OfferEvaluator:
             cap_without_market_data(evaluation, offer, self.guides, getattr(self.cfg, "no_data_max_score", 7.0),
                                     comps)
             apply_pl_bonus(evaluation, offer, getattr(self.cfg, "pl_bonus", 0))
-        cap_without_shipping(evaluation, offer)
+        cap_without_shipping(evaluation, offer, getattr(self.cfg, "no_shipping_max_score", 10.0))
         cap_impossible_variant(evaluation, offer)
         route = self.route(offer)
         evaluation["table_rows"] = len(route.rows) + sum(len(r) for _c, r in route.extra or ())

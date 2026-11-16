@@ -169,6 +169,10 @@ for _part in _env("SNIPER_FX_RATES").split(","):
         pass
 # Wysyłka w walucie spoza tabeli - przyjmujemy typową kwotę zamiast surowej liczby.
 UNKNOWN_SHIPPING_PLN = 20.0
+# 2026-11-16 (log pilota): shipping_details zwraca 404 (stronę HTML „La page n'existe pas”) dla kolejnych ofert -
+# Vinted chyba zmienił API. Bez kosztu wysyłki koszt zakupu = cena + tyle zł (typowa wysyłka; z zagranicy bywa
+# > 100 zł - alert ostrzega). 0 = jak dawniej (koszt bez wysyłki).
+SHIPPING_FALLBACK_PLN = _env_float("SNIPER_SHIPPING_FALLBACK_PLN", 35.0)
 # Nowy endpoint katalogu (Vinted przeniósł listę z www.vinted.pl/api/v2/catalog/items)
 CATALOG_URL = "https://api.vinted.pl/svc-catalogue/items"
 SIDEBAR_URL = BASE_URL + "/api/v2/items/{item_id}/details/sidebar"
@@ -417,6 +421,9 @@ class AiConfig:
     market_categories: tuple = field(default_factory=lambda: tuple(
         c.strip() for c in _env("SNIPER_MARKET_CATEGORIES", "phone,tablet,console").split(",") if c.strip()))
     no_box_factor: float = _env_float("SNIPER_NO_BOX_FACTOR", 0.88)
+    # Brak kosztu wysyłki (shipping_details nie przyszło): ocena najwyżej tyle. 10 = bez limitu (od 16.11 - koszt
+    # liczony z SNIPER_SHIPPING_FALLBACK_PLN, alert z ostrzeżeniem); dawniej 7 (wtedy żadnych alertów bez wysyłki).
+    no_shipping_max_score: float = _env_float("SNIPER_NO_SHIPPING_MAX_SCORE", 10.0)
     # 2026-11-16 (analyse_data/POPYT.md, sniper/market.py: demand): klasa popytu z comparables.db z flagami popytu
     # (analizator od 16.11) zamiast rotacji. Z ofert modelu wystawionych w oknie analizatora: udział, który zniknął
     # w tydzień (share), i ile takich zniknięć na tydzień (week, ~liczba kupujących). gorący: share ≥ HOT_SHARE i week

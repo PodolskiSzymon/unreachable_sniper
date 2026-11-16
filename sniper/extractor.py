@@ -10,7 +10,8 @@ from dataclasses import asdict, dataclass, field
 from datetime import datetime, timezone
 from decimal import Decimal, InvalidOperation
 
-from .config import BASE_URL, BUYER_FEE_FIXED, BUYER_FEE_PCT, FX_TO_PLN, UNKNOWN_SHIPPING_PLN
+from .config import (BASE_URL, BUYER_FEE_FIXED, BUYER_FEE_PCT, FX_TO_PLN, SHIPPING_FALLBACK_PLN,
+                     UNKNOWN_SHIPPING_PLN)
 
 
 @dataclass
@@ -244,6 +245,10 @@ def build_offer(item_id, sidebar, shipping_payload=None, catalog_item=None, user
     ship = shipping and (shipping.price_pln if shipping.price_pln is not None else shipping.price)
     if price is not None and ship is not None:
         total = float(price + Decimal(str(ship)))
+    elif price is not None and shipping is None and SHIPPING_FALLBACK_PLN:
+        # Wysyłka nieznana (shipping_details nie przyszło) - szacunek, żeby zysk nie był zawyżony; shipping zostaje
+        # None, więc evaluator.cap_without_shipping doda ostrzeżenie do alertu.
+        total = float(price) + SHIPPING_FALLBACK_PLN
 
     brand = (sidebar.get("brand_dto") or {}).get("title") or catalog_item.get("brand_title")
 

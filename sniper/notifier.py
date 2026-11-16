@@ -30,7 +30,7 @@ def _fmt_money(amount, currency):
 def shipping_text(offer):
     ship = offer.shipping
     if ship is None:
-        return "brak danych"
+        return "brak danych (Vinted nie podał - w koszcie zakupu szacunek, sprawdź w ofercie)"
     if ship.free_shipping:
         return "darmowa"
     if ship.pickup_only:
