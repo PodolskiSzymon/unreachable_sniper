@@ -5,8 +5,10 @@ sync_playwright mamy w pełni asynchroniczny klient i async API Playwrighta.
 """
 import asyncio
 import contextlib
+import html
 import json
 import logging
+import re
 import time
 from pathlib import Path
 from urllib.parse import unquote, urlsplit
@@ -327,7 +329,27 @@ class VintedSession:
             if response.status_code == 429:
                 raise RateLimited(url)
             if response.is_error:
-                log.warning("[HTTP] %s %s | server=%s | body: %s", response.status_code, response.url.path,
-                            response.headers.get("server", "?"), response.text[:300].replace("\n", " "))
+                log.warning("[HTTP] %s %s%s%s | server=%s | body: %s", response.status_code, response.url.host,
+                            response.url.path, _redirect_note(response), response.headers.get("server", "?"),
+                            _error_body(response))
             response.raise_for_status()
             return response.json()
+
+
+def _redirect_note(response):
+    """„ (przekierowanie z www.vinted.pl)” - gdy odpowiedź przyszła z innej domeny niż pytanie (2026-11-16: 404 ze
+    strony vinted.fr przy shipping_details zagranicznej oferty)."""
+    if not response.history:
+        return ""
+    first = response.history[0].url.host
+    return f" (przekierowanie z {first})" if first != response.url.host else " (przekierowanie)"
+
+
+def _error_body(response):
+    """Treść błędu do logu: strona HTML → tylko jej tytuł (zamiast 300 znaków znaczników), JSON / tekst → początek."""
+    text = response.text or ""
+    if "html" in (response.headers.get("content-type") or "") or text.lstrip()[:15].lower().startswith(("<!doctype",
+                                                                                                         "<html")):
+        match = re.search(r"<title[^>]*>(.*?)</title>", text, re.I | re.S)
+        return f"strona HTML „{html.unescape(match.group(1)).strip()[:80]}”" if match else "strona HTML"
+    return text[:300].replace("\n", " ")

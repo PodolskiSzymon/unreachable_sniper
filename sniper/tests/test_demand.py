@@ -220,3 +220,37 @@ def test_push_message_shows_demand():
           "market": {"text": "gorący (schodzi szybko): w tydzień schodzi 88% nowych ofert", "list_price": 1890}}
     message = build_deal_message(offer, ev, "t")["message"]
     assert "Popyt: gorący (schodzi szybko)" in message and "wystaw ~1 890 zł" in message
+
+
+def test_http_error_log_is_readable(caplog):
+    """16.11 (log pilota): 404 shipping_details jako strona HTML vinted.fr - w logu tytuł strony i przekierowanie,
+    a nie 300 znaków znaczników."""
+    import asyncio
+    import logging
+
+    import httpx
+
+    from sniper.session import VintedSession
+
+    def handler(request):
+        if request.url.host == "www.vinted.pl":
+            return httpx.Response(302, headers={"location": "https://www.vinted.fr" + request.url.path})
+        return httpx.Response(404, headers={"content-type": "text/html; charset=utf-8"},
+                              text="<!DOCTYPE html><html><head><title>La page n&#39;existe pas</title>"
+                                   "<link hreflang='fr-fr' href='https://www.vinted.fr/x'></head></html>")
+
+    async def scenario():
+        session = VintedSession()
+        session.client = httpx.AsyncClient(transport=httpx.MockTransport(handler), headers=session.client.headers,
+                                           follow_redirects=True)
+        try:
+            await session.get_json("https://www.vinted.pl/api/v2/items/1/shipping_details")
+        except httpx.HTTPStatusError:
+            pass
+        await session.close()
+
+    with caplog.at_level(logging.WARNING, logger="sniper.session"):
+        asyncio.run(scenario())
+    line = next(r.getMessage() for r in caplog.records if "[HTTP]" in r.getMessage())
+    assert "404 www.vinted.fr/api/v2/items/1/shipping_details (przekierowanie z www.vinted.pl)" in line
+    assert "strona HTML „La page n'existe pas”" in line and "hreflang" not in line
