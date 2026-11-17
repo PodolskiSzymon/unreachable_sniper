@@ -576,7 +576,9 @@ def test_comparables_lookup(tmp_path):
     comps = Comparables(tmp_path / "comparables.db")
     iph = comps.lookup("phone", "iPhone 13 128GB niebieski")
     assert iph and iph["n_active"] == 12 and iph["n_gone"] == 12                    # bez wersji Pro
-    assert 1100 <= iph["estimate"] <= 1250 and "13" in iph["words"]
+    # 17.11: telefony / tablety / konsole - szacunek = dolne 10% cen aktywnych (1000 + 20·i → ~1022), nie wyżej
+    # niż dawny (max zniknięte, środek p25-mediana: 1100-1250)
+    assert 1000 <= iph["estimate"] <= 1050 and 1100 <= iph["estimate_old"] <= 1250 and "13" in iph["words"]
     pro = comps.lookup("phone", "iPhone 13 Pro 128 GB")
     assert pro and pro["median"] > 2000
     gbc = comps.lookup("console", "Nintendo Gameboy Color Pokemon")

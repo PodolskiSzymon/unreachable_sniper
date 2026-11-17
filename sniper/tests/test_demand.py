@@ -64,12 +64,16 @@ def test_clearing_without_sales_data_is_careful():
     assert apply_clearing([lower])[0]["estimate"] == 891                            # nigdy wyżej niż dawny
     hot = level(estimate=1700, median=1750, clear=[1800, 1850, 1900, 1950, 2000])    # zeszły drożej niż mediana
     apply_clearing([hot])
-    assert hot["estimate"] == 1750                                                   # najwyżej mediana / dawny
+    assert hot["estimate"] == 1700                                                   # nigdy ponad dawny szacunek
 
 
-def test_old_file_levels_unchanged():
-    old = {"label": "x", "n_active": 10, "n_gone": 5, "median": 1000, "estimate": 950, "p25": 900}
-    assert apply_clearing([old])[0]["estimate"] == 950
+def test_value_from_lowest_tenth_of_active_offers():
+    """17.11 (pomysł użytkownika, iPad 10 64 GB): szacunek = dolne 10% cen aktywnych - także bez flag popytu."""
+    lv = {"label": "x", "n_active": 116, "n_gone": 40, "median": 1556, "estimate": 1449, "p25": 1368, "p_low": 1091}
+    apply_clearing([lv])
+    assert lv["estimate"] == 1091 and lv["estimate_old"] == 1449 and "dolne 10%" in lv["estimate_basis"]
+    few = {"label": "x", "n_active": 3, "n_gone": 1, "median": 1000, "estimate": 950, "p25": 900, "p_low": 700}
+    assert apply_clearing([few])[0]["estimate"] == 900                               # < 5 aktywnych: p25 / dawny
 
 
 def _demand_db(path, rows, fresh_days=14.0):
@@ -113,7 +117,9 @@ def test_comparables_levels_with_demand_flags(tmp_path):
     _demand_db(tmp_path / "comparables.db", _remarkable_rows())
     comps = Comparables(tmp_path / "comparables.db")
     rm = comps.levels("tablet", "reMarkable 2 + Folio", "Bardzo dobry")
-    assert rm and rm[0]["n_clear"] == 5 and rm[0]["estimate"] == 1184 and rm[0]["estimate_old"] > 1500
+    active = sorted([1600 + 25 * i for i in range(14)] + [1500 + 50 * i for i in range(4)])
+    p10 = active[1] + (active[2] - active[1]) * 0.7                                    # dolne 10% z 18 ofert
+    assert rm and rm[0]["n_clear"] == 5 and abs(rm[0]["estimate"] - p10) < 1e-6 and rm[0]["estimate_old"] > 1500
     assert rm[0]["fresh_days"] == 14.0 and rm[0]["n_fresh"] == 9 and rm[0]["n_stale"] == 14
     ipad = comps.levels("tablet", "iPad A16 128GB", "Bardzo dobry")
     assert ipad and ipad[0]["n_sold"] == 2

@@ -173,6 +173,10 @@ UNKNOWN_SHIPPING_PLN = 20.0
 # Vinted chyba zmienił API. Bez kosztu wysyłki koszt zakupu = cena + tyle zł (typowa wysyłka; z zagranicy bywa
 # > 100 zł - alert ostrzega). 0 = jak dawniej (koszt bez wysyłki).
 SHIPPING_FALLBACK_PLN = _env_float("SNIPER_SHIPPING_FALLBACK_PLN", 35.0)
+# 2026-11-17 (pomysł użytkownika: „bierzemy ok. 5-10% najniższych cen jako wartość rynkową”): telefony, tablety,
+# konsole - szacunek sprzedaży = cena, poniżej której jest tylko tyle ofert aktywnych tego modelu (dolne 10%). Na
+# kopii 07.11: 70% potwierdzonych sprzedaży ≤ 7 dni było po tej cenie albo drożej (dawny szacunek: 33%).
+VALUE_SHARE = _env_float("SNIPER_VALUE_SHARE", 0.10)
 # Nowy endpoint katalogu (Vinted przeniósł listę z www.vinted.pl/api/v2/catalog/items)
 CATALOG_URL = "https://api.vinted.pl/svc-catalogue/items"
 SIDEBAR_URL = BASE_URL + "/api/v2/items/{item_id}/details/sidebar"

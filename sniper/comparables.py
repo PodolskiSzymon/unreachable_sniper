@@ -25,6 +25,7 @@ import sqlite3
 import unicodedata
 from pathlib import Path
 
+from .config import VALUE_SHARE
 from .guides import _ALIASES, VARIANT_WORDS, tokens
 
 log = logging.getLogger("sniper.comparables")
@@ -353,10 +354,11 @@ class Comparables:
                     out.append({**found, "label": label + note + state, "condition": group})
                 if out:
                     break
-            if getattr(self, "_demand", False) and category in CLEARING_CATEGORIES:
-                days = (getattr(self, "_fresh_days", None) or {}).get(category)
-                for lv in out:
-                    lv["fresh_days"] = days
+            if category in CLEARING_CATEGORIES:
+                if getattr(self, "_demand", False):
+                    days = (getattr(self, "_fresh_days", None) or {}).get(category)
+                    for lv in out:
+                        lv["fresh_days"] = days
                 apply_clearing(out)
             return out
         except sqlite3.Error as exc:
@@ -419,7 +421,7 @@ def _stats(active, gone, demand=None):
     mid = (p25 + med) / 2 if active else None
     estimate = max(x for x in (gone_med, mid) if x is not None) if (gone_med or mid) else None
     out = {"n_active": len(active), "n_gone": len(gone), "p25": p25, "median": med, "p75": p75,
-           "gone_median": gone_med, "estimate": estimate}
+           "gone_median": gone_med, "estimate": estimate, "p_low": _pct(active, VALUE_SHARE)}
     if demand is not None:
         clear = demand["clear"]
         out.update(estimate_old=estimate, n_clear=len(clear), clear_median=_pct(clear, .5),
@@ -437,17 +439,48 @@ MIN_CLEAR = 5            # od tylu ofert, które zeszły, ich mediana jest szacu
 CLEAR_RATIO_LIMITS = (0.5, 1.05)
 
 
+MIN_ACTIVE_LOW = 5        # od tylu aktywnych ofert szacunek = dolne VALUE_SHARE cen
+
+
 def apply_clearing(levels):
-    """Szacunek = cena, po której oferty schodzą (2026-11-16, POPYT.md). Dla każdego poziomu:
-      * ≥ MIN_CLEAR ofert, które zeszły → ich mediana,
-      * mniej → najniższa z: dawny szacunek, mediana zeszłych (przy ≥ 3), mediana aktywnych × współczynnik
-        zejścia modelu (zeszłe / aktywne na poziomie z największą liczbą zeszłych), a bez współczynnika p25 aktywnych
-        (mało danych o sprzedaży = ostrożnie),
-      * nigdy wyżej niż wyższa z (dawny szacunek, mediana aktywnych).
-    Poziomy bez flag (stary plik) zostają bez zmian. → ta sama lista (zmieniona w miejscu)."""
-    with_data = [lv for lv in levels if "n_clear" in lv]
-    if not with_data:
+    """Szacunek szybkiej sprzedaży (telefony, tablety, konsole). Od 2026-11-17 (pomysł użytkownika, iPad 10 64 GB:
+    wycena 1380 zł, a nie schodzi za 1100) = **dolne 10% cen aktywnych ofert** tego poziomu (`p_low`,
+    SNIPER_VALUE_SHARE): kupujący biorą najtańsze sensowne oferty. Kopia 07.11 (potwierdzone sprzedaże ≤ 7 dni, bez
+    oszustw / uszkodzonych): po cenie ≥ p10 aktywnych 70% (mediana sprzedaż / p10 = 1,10), ≥ p20 51%, ≥ dawnego
+    szacunku 33%; rozkład trójkątny (p5, mediana, p95) na 10% wypadał jak p20 - gorzej niż zwykły kwantyl.
+    Mniej niż MIN_ACTIVE_LOW aktywnych: jak 16.11 - mediana ofert, które zeszły (≤ 3 dni / sprzedane), mediana
+    aktywnych × współczynnik zejścia albo p25. Nigdy wyżej niż dawny szacunek. → ta sama lista (zmieniona w miejscu)."""
+    if not levels:
         return levels
+    for lv in levels:
+        lv.setdefault("estimate_old", lv.get("estimate"))
+    with_data = [lv for lv in levels if "n_clear" in lv]
+    ratio = None
+    if with_data:
+        widest = max(with_data, key=lambda lv: (lv["n_clear"], lv["n_active"] + lv["n_gone"]))
+        if widest["n_clear"] >= MIN_CLEAR and widest.get("median") and widest.get("clear_median"):
+            low, high = CLEAR_RATIO_LIMITS
+            ratio = min(max(widest["clear_median"] / widest["median"], low), high)
+    for lv in levels:
+        old = lv.get("estimate_old")
+        if lv.get("n_active", 0) >= MIN_ACTIVE_LOW and lv.get("p_low"):
+            estimate, basis = lv["p_low"], f"dolne {VALUE_SHARE * 100:.0f}% cen aktywnych ofert"
+        elif lv.get("n_clear", 0) >= MIN_CLEAR and lv.get("clear_median"):
+            estimate, basis = lv["clear_median"], f"mediana {lv['n_clear']} ofert, które zeszły"
+        else:
+            options = [(old, "dawny szacunek (mało danych)")]
+            if lv.get("n_clear", 0) >= 3 and lv.get("clear_median"):
+                options.append((lv["clear_median"], f"mediana {lv['n_clear']} ofert, które zeszły"))
+            if ratio and lv.get("median"):
+                options.append((ratio * lv["median"], f"mediana aktywnych × {ratio:.2f} (tyle schodzi ten model)"))
+            elif lv.get("p25"):
+                options.append((lv["p25"], "p25 aktywnych (mało danych)"))
+            options = [o for o in options if o[0]]
+            if not options:
+                continue
+            estimate, basis = min(options, key=lambda o: o[0])
+        lv.update(estimate=min(estimate, old) if old else estimate, estimate_basis=basis, clear_ratio=ratio)
+    return levels
     widest = max(with_data, key=lambda lv: (lv["n_clear"], lv["n_active"] + lv["n_gone"]))
     ratio = None
     if widest["n_clear"] >= MIN_CLEAR and widest.get("median") and widest.get("clear_median"):
@@ -483,7 +516,8 @@ def describe_levels(levels):
              f"{' '.join(lv['words'])}): aktywnych {lv['n_active']} - p25 "
              f"{zl(lv['p25'])}, mediana {zl(lv['median'])}, p75 {zl(lv['p75'])} zł; zniknęło {lv['n_gone']} "
              f"(mediana {zl(lv['gone_median'])} zł)" + _clear_text(lv, zl) +
-             f"; szacunek szybkiej sprzedaży ~{zl(lv['estimate'])} zł" for i, lv in enumerate(levels, 1)]
+             f"; szacunek szybkiej sprzedaży ~{zl(lv['estimate'])} zł"
+             + (f" ({lv['estimate_basis']})" if lv.get("estimate_basis") else "") for i, lv in enumerate(levels, 1)]
     return "\n\n<mediany>\n" + "\n".join(lines) + "\n</mediany>"
 
 
