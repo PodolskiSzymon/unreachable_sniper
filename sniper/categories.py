@@ -22,14 +22,16 @@ from pathlib import Path
 log = logging.getLogger("sniper.categories")
 
 CATEGORY_OF_CATALOG = {3580: "laptop", 3661: "phone", 3728: "tablet", 3025: "console", 3603: "ram", 3607: "storage",
-                       3602: "gpu", 3599: "cpu", 3600: "motherboard", 3601: "bundle"}
+                       3602: "gpu", 3599: "cpu", 3600: "motherboard", 3601: "bundle",
+                       3581: "desktop"}                    # 2026-11-17: komputery stacjonarne
 # Ogólne katalogi sprzed 31.10 (części i podzespoły, nośniki, akcesoria) - nie skanujemy.
 RETIRED_CATALOGS = (3582, 3583, 3584)
 AI_ENABLED_NAMES = ("laptop", "phone", "tablet", "console", "gpu", "ram", "storage", "cpu", "motherboard",
-                    "bundle")                                                          # SNIPER_CATEGORIES
+                    "bundle", "desktop")                                               # SNIPER_CATEGORIES
 CATEGORY_NAMES = {"laptop": "laptopy", "phone": "telefony", "tablet": "tablety", "console": "konsole",
                   "gpu": "karty graficzne", "ram": "pamięci RAM", "storage": "dyski", "cpu": "procesory",
-                  "motherboard": "płyty główne", "bundle": "zestawy płyta + procesor"}
+                  "motherboard": "płyty główne", "bundle": "zestawy płyta + procesor",
+                  "desktop": "komputery stacjonarne"}
 
 # Zapasowe zakresy, gdy brak catalogs.json (analiza rynku 2026-10-25; podzespoły z dawnych katalogów ogólnych);
 # aktualne liczy analizator do catalogs.json (procesory / płyty / zestawy tylko stamtąd - tanie części rzadko
@@ -276,6 +278,8 @@ TEST_KITS = {
                     "G7400 ze stanowiska B) + zasilacz; POST, BIOS, wszystkie sloty RAM i M.2, piny gniazda"),
     "bundle": ("zasilacz + SSD ze stanowiska A (+ RAM, jeśli brak w zestawie); POST, BIOS, Cinebench / OCCT 15 min, "
                "temperatury"),
+    "desktop": ("monitor HDMI / DisplayPort + klawiatura i mysz; POST, BIOS (zgodność procesora / RAM z opisem), "
+                "OCCT / FurMark 15 min, temperatury, dyski w CrystalDiskInfo"),
 }
 
 

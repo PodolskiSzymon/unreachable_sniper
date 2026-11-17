@@ -73,7 +73,9 @@ EXTRA_PROXIES = range(2, 10)
 # Nazwy kategorii po polsku też działają (SNIPER_PROXY_2_KATEGORIE=telefony,konsole).
 CATEGORY_ALIASES = {"laptopy": "laptop", "telefony": "phone", "tablety": "tablet", "konsole": "console",
                     "karty": "gpu", "karty graficzne": "gpu", "pamieci": "ram", "pamięci": "ram", "dyski": "storage",
-                    "procesory": "cpu", "plyty": "motherboard", "płyty": "motherboard", "zestawy": "bundle"}
+                    "procesory": "cpu", "plyty": "motherboard", "płyty": "motherboard", "zestawy": "bundle",
+                    "komputery": "desktop", "pc": "desktop", "stacjonarne": "desktop",
+                    "komputery stacjonarne": "desktop"}
 
 
 def _proxy_key(name):
@@ -290,7 +292,8 @@ def _env_list(name, default=""):
 
 
 # Nasze kategorie (sniper/categories.py) - do list słów per kategoria: SNIPER_AI_KEYWORDS_PHONE itd.
-AI_CATEGORIES = ("laptop", "phone", "tablet", "console", "gpu", "ram", "storage", "cpu", "motherboard", "bundle")
+AI_CATEGORIES = ("laptop", "phone", "tablet", "console", "gpu", "ram", "storage", "cpu", "motherboard", "bundle",
+                 "desktop")
 
 
 def _env_category_lists(prefix):

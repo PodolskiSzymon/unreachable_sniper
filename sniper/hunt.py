@@ -17,7 +17,7 @@ from pathlib import Path
 log = logging.getLogger("sniper.hunt")
 
 DEFAULT_FILE = Path(__file__).with_name("hunt_for_basal.md")
-SKIP_CATEGORIES = {"laptop", "phone", "tablet", "console", "bundle"}
+SKIP_CATEGORIES = {"laptop", "phone", "tablet", "console", "bundle", "desktop"}
 BAD = re.compile(r"\b(?:na czesci|uszkodzon\w*|nie dziala\w*|niesprawn\w*|brak obrazu|artefakt\w*|for parts|broken|"
                  r"not working|defekt\w*|do naprawy|nie wykrywa\w*|nefunk\w*|piese|hibas|kaputt|defect)\b")
 NOT_A_CARD = re.compile(r"\b(?:kupie|szukam|zamienie|zamiana|wtb|radiator|heatsink|waterblock|blok wodny|backplate|"
