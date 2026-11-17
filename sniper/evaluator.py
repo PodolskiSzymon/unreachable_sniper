@@ -502,13 +502,19 @@ def cap_without_shipping(evaluation, offer, cap=10.0):
     żadnych alertów. Teraz koszt zawiera szacunek SNIPER_SHIPPING_FALLBACK_PLN (extractor.build_offer), alert idzie
     z ostrzeżeniem (`shipping_assumed`), a limit oceny `cap` (SNIPER_NO_SHIPPING_MAX_SCORE) jest opcjonalny."""
     from .config import SHIPPING_FALLBACK_PLN
+    from .extractor import buyer_fee
     if getattr(offer, "shipping", None) is not None:
         return evaluation
     assumed = SHIPPING_FALLBACK_PLN if getattr(offer, "total_price", None) is not None else 0
     evaluation["shipping_assumed"] = assumed
-    note = (f"w koszcie przyjęto ~{assumed:.0f} zł" if assumed else "koszt liczony bez wysyłki")
+    # 17.11 (prośba użytkownika): do ilu zł wysyłki oferta jest okazją = max zakup - cena - opłata Vinted.
+    price, max_buy = getattr(offer, "price", None), evaluation.get("max_buy_price_pln")
+    if price is not None and max_buy is not None:
+        evaluation["shipping_max"] = round(max_buy - price - (buyer_fee(price) or 0))
+    limit = (f"okazja, jeśli wysyłka ≤ {evaluation['shipping_max']} zł" if evaluation.get("shipping_max") is not None
+             and evaluation["shipping_max"] >= 0 else f"w koszcie przyjęto ~{assumed:.0f} zł")
     evaluation.setdefault("red_flags", []).append(
-        f"Program: Vinted nie podał kosztu wysyłki - {note}; sprawdź wysyłkę w ofercie (z zagranicy bywa > 100 zł)")
+        f"Program: Vinted nie podaje kosztu wysyłki - {limit}; sprawdź wysyłkę w ofercie (z zagranicy bywa > 100 zł)")
     if cap and cap < 10 and evaluation["score"] > cap:
         evaluation.setdefault("score_ai", evaluation["score"])
         evaluation["score"] = float(cap)

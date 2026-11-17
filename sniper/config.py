@@ -170,9 +170,10 @@ for _part in _env("SNIPER_FX_RATES").split(","):
 # Wysyłka w walucie spoza tabeli - przyjmujemy typową kwotę zamiast surowej liczby.
 UNKNOWN_SHIPPING_PLN = 20.0
 # 2026-11-16 (log pilota): shipping_details zwraca 404 (stronę HTML „La page n'existe pas”) dla kolejnych ofert -
-# Vinted chyba zmienił API. Bez kosztu wysyłki koszt zakupu = cena + tyle zł (typowa wysyłka; z zagranicy bywa
-# > 100 zł - alert ostrzega). 0 = jak dawniej (koszt bez wysyłki).
-SHIPPING_FALLBACK_PLN = _env_float("SNIPER_SHIPPING_FALLBACK_PLN", 35.0)
+# Vinted chyba zmienił API. Od 17.11 (prośba użytkownika) Sniper w ogóle nie pyta o wysyłkę (SNIPER_FETCH_SHIPPING);
+# koszt zakupu = cena + opłata Vinted + tyle zł (najtańsza typowa wysyłka, InPost / Vinted Go), a alert podaje,
+# do ilu zł wysyłki to jest okazja („Okazja, jeśli wysyłka ≤ X zł”). 0 = koszt bez wysyłki.
+SHIPPING_FALLBACK_PLN = _env_float("SNIPER_SHIPPING_FALLBACK_PLN", 15.0)
 # 2026-11-17 (pomysł użytkownika: „bierzemy ok. 5-10% najniższych cen jako wartość rynkową”): telefony, tablety,
 # konsole - szacunek sprzedaży = cena, poniżej której jest tylko tyle ofert aktywnych tego modelu (dolne 10%). Na
 # kopii 07.11: 70% potwierdzonych sprzedaży ≤ 7 dni było po tej cenie albo drożej (dawny szacunek: 33%).
@@ -688,6 +689,9 @@ class ScoutConfig:
     # Dolny próg ceny dla KAŻDEGO katalogu (także z catalogs.json / SNIPER_CATALOGS): price_from w zapytaniu nie
     # niższe niż to. 0 = wyłączone. Domyślnie 300 zł (2026-10-27) - patrz categories.apply_floor.
     price_floor: float = _env_float("SNIPER_PRICE_FLOOR", 300.0)
+    # Pobieranie kosztu wysyłki (shipping_details). Od 16.11 zwraca 404 dla wszystkich ofert - wyłączone (oszczędza
+    # proxy i czas); alert podaje graniczny koszt wysyłki. true = znów pytać (po podpięciu nowego API z cURL).
+    fetch_shipping: bool = _env_bool("SNIPER_FETCH_SHIPPING", False)
     price_to: str = _env("SNIPER_PRICE_TO")               # maksymalna cena w PLN (puste = bez filtra)
     # Ofert na jeden skan. svc-catalogue respektuje per_page (test check_per_page.py, 2026-10-02):
     # 96 ofert = ~39 KB transferu na skan, 20 ofert = ~9 KB. 20 to zapas ~1 h przy nowej ofercie co ~3 min.

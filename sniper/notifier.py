@@ -94,6 +94,8 @@ def ai_lines(ai):
         ("Potencjalny zysk", _pln(ev.get("potential_profit_pln"))
          + (f" (marża {ev['margin_pct']:.0f}%)" if isinstance(ev.get("margin_pct"), (int, float)) else "")),
         ("Sprzedaż", f"~{ev['sell_days_estimate']} dni" if ev.get("sell_days_estimate") is not None else "?"),
+        *([("Wysyłka", f"Vinted nie podaje - okazja, jeśli wysyłka ≤ {_pln(ev['shipping_max'])}")]
+          if ev.get("shipping_max") is not None and ev["shipping_max"] >= 0 else []),
         *([("Popyt", (ev.get("market") or {})["text"] + (
             f"; wystaw ~{_pln(ev['market']['list_price'])}" if ev["market"].get("list_price") else ""))]
           if (ev.get("market") or {}).get("text") else []),

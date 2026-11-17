@@ -33,8 +33,12 @@ def build_deal_message(offer, evaluation, topic, priority=5, attach_photo=True):
     title = f"Okazja {score:g}/10" if isinstance(score, (int, float)) else "Okazja"
     title += f" ({category}): " if category else ": "
     title += offer.get("title") or "?"
-    lines = [f"{_pln(purchase_cost(offer))} z wysyłką i opłatą Vinted (cena {_pln(offer.get('price'))})"]
-    if ev.get("shipping_assumed") is not None:
+    shipping_note = " (wysyłka szacunkowa)" if ev.get("shipping_assumed") is not None else ""
+    lines = [f"{_pln(purchase_cost(offer))} z wysyłką{shipping_note} i opłatą Vinted (cena {_pln(offer.get('price'))})"]
+    if ev.get("shipping_max") is not None and ev["shipping_max"] >= 0:
+        lines.append(f"✅ Okazja, jeśli wysyłka ≤ {_pln(ev['shipping_max'])} (Vinted nie podaje wysyłki - sprawdź w "
+                     f"ofercie; z zagranicy bywa > 100 zł)")
+    elif ev.get("shipping_assumed") is not None:
         assumed = ev["shipping_assumed"]
         lines.append("⚠ Wysyłka nieznana (Vinted nie podał) - " + (f"przyjęto ~{_pln(assumed)}" if assumed else
                      "koszt bez wysyłki") + "; sprawdź w ofercie, z zagranicy bywa > 100 zł")

@@ -14,7 +14,7 @@ stara kopia, nie czytać.
   botów (auto-zakup wyłączony, `SNIPER_BUY_ENABLED=false`, bo Vinted wylogowuje konto bota).
 * Nie commitować sekretów (`.env`, klucze, hasła, tokeny, temat ntfy, `logs/`, `session.json`, profil przeglądarki).
 * Gałąź jak w `analyse_data` (stan: `claude/gifted-volta-x1764p`), commit + push, bez PR. Bez identyfikatora modelu
-  AI w commitach/kodzie. Testy: `python -m pytest sniper/tests -q` (325 + 1 pominięty).
+  AI w commitach/kodzie. Testy: `python -m pytest sniper/tests -q` (326 + 1 pominięty).
 
 ## Moduły (`sniper/`)
 
@@ -44,7 +44,8 @@ stara kopia, nie czytać.
   Nagłówki z cURL przeglądarki (`config.CATALOG_HEADERS`); `cf_clearance`/`datadome` związane z UA.
 * Szczegóły: `www.vinted.pl/api/v2/items/{id}/details/sidebar` (`item_closing_action`: `"sold"` / `null`),
   `/api/v2/items/{id}/shipping_details` (cena w walucie sprzedawcy!) – **od 16.11 zwraca 404 (strona HTML „La page
-  n'existe pas”) dla wszystkich ofert: czekamy na nowe API wysyłki (cURL z F12 od użytkownika)**; do tego czasu koszt
-  = cena + `SNIPER_SHIPPING_FALLBACK_PLN` (35 zł) i ostrzeżenie w alercie. ID nadawane przy tworzeniu – w
+  n'existe pas”) dla wszystkich ofert: czekamy na nowe API wysyłki (cURL z F12 od użytkownika)**; od 17.11 Sniper
+  o wysyłkę nie pyta (`SNIPER_FETCH_SHIPPING=false`), koszt = cena + opłata + `SNIPER_SHIPPING_FALLBACK_PLN` (15 zł),
+  a alert podaje „Okazja, jeśli wysyłka ≤ X zł” (X = max zakup − cena − opłata). ID nadawane przy tworzeniu – w
   „najnowszych” bywają niższe ID (deduplikacja bez progu).
 * Zakup (test 03.10): „Kup teraz” → `/checkout?purchase_id=…` → „Zapłać” → `POST /api/v2/purchases/{id}/checkout/payment`.

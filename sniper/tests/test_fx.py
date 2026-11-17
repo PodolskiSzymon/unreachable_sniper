@@ -53,7 +53,7 @@ def test_missing_shipping_caps_score():
     offer = laptop()
     offer.shipping = None
     ev = cap_without_shipping({"score": 9.0, "is_deal": True}, offer, cap=7.0)
-    assert ev["score"] == 7.0 and ev["score_ai"] == 9.0 and "nie podał kosztu wysyłki" in ev["red_flags"][-1]
+    assert ev["score"] == 7.0 and ev["score_ai"] == 9.0 and "nie podaje kosztu wysyłki" in ev["red_flags"][-1]
     assert cap_without_shipping({"score": 9.0, "is_deal": True}, laptop())["score"] == 9.0
 
 
@@ -71,3 +71,9 @@ def test_missing_shipping_still_alerts_with_estimate():
     assert ev["score"] == 9.0 and ev["shipping_assumed"] == SHIPPING_FALLBACK_PLN
     message = build_deal_message(offer.to_dict(), ev, "t")["message"]
     assert "Wysyłka nieznana" in message and f"przyjęto ~{SHIPPING_FALLBACK_PLN:.0f} zł" in message
+    # 17.11: z max zakupem alert podaje graniczny koszt wysyłki
+    ev = cap_without_shipping({"score": 9.0, "is_deal": True, "max_buy_price_pln": offer.price + 60}, offer)
+    fee = round(offer.price * 0.05 + 2.90, 2)
+    assert ev["shipping_max"] == round(60 - fee)
+    message = build_deal_message(offer.to_dict(), ev, "t")["message"]
+    assert f"Okazja, jeśli wysyłka ≤ {round(60 - fee)} zł" in message

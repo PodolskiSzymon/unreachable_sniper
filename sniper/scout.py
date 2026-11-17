@@ -314,18 +314,27 @@ class Scout:
         referer = item_url(item_id, item)  # jak date_verification.get_sidebar_info: Referer = item['url']
         session = self.lane_for(spec).session         # szczegóły przez to samo proxy (i ciastka) co katalog
 
+        fetch_shipping = getattr(self.cfg, "fetch_shipping", False)
         async with self._detail_slots:
-            sidebar, shipping = await asyncio.gather(
-                session.get_json(SIDEBAR_URL.format(item_id=item_id), referer=referer),
-                session.get_json(SHIPPING_URL.format(item_id=item_id), referer=referer),
-                return_exceptions=True,
-            )
+            if fetch_shipping:
+                sidebar, shipping = await asyncio.gather(
+                    session.get_json(SIDEBAR_URL.format(item_id=item_id), referer=referer),
+                    session.get_json(SHIPPING_URL.format(item_id=item_id), referer=referer),
+                    return_exceptions=True,
+                )
+            else:
+                # 17.11: shipping_details nie działa (404) - tylko sidebar; alert podaje graniczny koszt wysyłki.
+                shipping = None
+                try:
+                    sidebar = await session.get_json(SIDEBAR_URL.format(item_id=item_id), referer=referer)
+                except Exception as exc:
+                    sidebar = exc
 
         if isinstance(sidebar, Exception):
             log.error("[SCOUT] Brak detali dla %s: %r", item_id, sidebar)
             self._skip("błąd detali")
             return
-        if isinstance(shipping, Exception):
+        if fetch_shipping and isinstance(shipping, Exception):
             # Bez wysyłki koszt byłby zaniżony (z Finlandii bywa > 100 zł) - jeszcze jedna próba (nowe IP).
             try:
                 shipping = await session.get_json(SHIPPING_URL.format(item_id=item_id), referer=referer)

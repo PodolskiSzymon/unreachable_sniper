@@ -83,6 +83,7 @@ def test_routes_split_catalogs_between_proxies_and_details_follow():
     async def scenario():
         main, di = _session(handler_for("glowne")), _session(handler_for("di"))
         cfg = ScoutConfig(category="3580", catalogs="3580:300-6000, 3661:300-3600, 3025:300-4400", price_floor=0,
+                          fetch_shipping=True,
                           proxy_routes={"phone": "di", "console": "di"}, log_dir="")
         scout = Scout(cfg, main, EmailNotifier(SmtpConfig()), sessions={"di": di})
         emitted = []
@@ -377,3 +378,28 @@ def test_stale_price_range_stops_fast_scans():
         return list(lane.fast)
 
     assert asyncio.run(scenario()) == [(3728, "300", "4100")]
+
+
+
+def test_no_shipping_request_by_default():
+    """17.11: shipping_details zwraca 404 - domyślnie Sniper pyta tylko o sidebar (koszt z szacunkiem wysyłki)."""
+    calls = []
+
+    def handler(request):
+        calls.append(request.url.path.rsplit("/", 1)[-1])
+        return httpx.Response(200, json={"id": 1, "title": "iPhone 13", "price": {"amount": "900", "currency_code": "PLN"}})
+
+    async def scenario():
+        session = VintedSession()
+        session.client = httpx.AsyncClient(transport=httpx.MockTransport(handler), headers=session.client.headers)
+        scout = Scout(ScoutConfig(category="3661", catalogs="", price_floor=0), session, EmailNotifier(SmtpConfig()))
+        emitted = []
+        scout.emit = emitted.append
+        await scout.inspect({"id": 1, "title": "iPhone 13"}, None, "phone")
+        await session.close()
+        return emitted
+
+    emitted = asyncio.run(scenario())
+    from sniper.config import SHIPPING_FALLBACK_PLN
+    assert calls == ["sidebar"] and emitted and emitted[0].shipping is None
+    assert emitted[0].total_price == 900 + SHIPPING_FALLBACK_PLN
