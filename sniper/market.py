@@ -175,9 +175,17 @@ def demand(levels, cfg=None):
     elif level["n_active"] >= 8 and stale is not None and stale >= 0.7:
         klass = "martwy"                      # prawie nic nowego się nie pojawia, a stare oferty wiszą
     sold = level.get("n_sold", 0)
+    note = None
     if klass == "martwy" and sold >= 3:
         klass = "wolny"                       # potwierdzone sprzedaże = ktoś jednak kupuje
-    return {"class": klass, "share": share, "week": week, "stale": stale, "n_fresh": fresh, "n_sold": sold,
+    # 2026-11-17 (iPad 10 64 GB kupiony za ~900 zł nie schodzi nawet za 1100, choć 8 z 12 nowych ofert „zniknęło”
+    # w tydzień - wszystkie usunięte / ukryte, ZERO potwierdzonych sprzedaży): zniknięcie to nie sprzedaż. U
+    # użytkownika dobre zakupy (S23, iPad A16) miały potwierdzone sprzedaże, złe (reMarkable, MatePad, iPad 10) - żadnej.
+    if klass == "gorący" and sold < get("demand_hot_min_sold", 2):
+        klass, note = "normalny", f"„gorący” tylko przy ≥ {get('demand_hot_min_sold', 2):g} potwierdzonych sprzedażach"
+    if klass in ("gorący", "normalny") and sold == 0 and level.get("n_clear", 0) >= get("demand_no_sales_clear", 10):
+        klass, note = "wolny", "znikają, ale bez żadnej potwierdzonej sprzedaży (usunięcia / oszustwa / poza Vinted)"
+    return {"class": klass, "note": note, "share": share, "week": week, "stale": stale, "n_fresh": fresh, "n_sold": sold,
             "n_clear": level.get("n_clear", 0), "clear_median": level.get("clear_median"),
             "median": level.get("median"), "estimate": level.get("estimate")}
 
@@ -196,6 +204,8 @@ def value_factor(levels, offer, cfg):
     if found is None:
         return base
     klass = found["class"]
+    if not found.get("n_sold"):
+        return slow               # bez potwierdzonej sprzedaży AI nie wycenia ponad dane (2026-11-17, iPad 10)
     if klass == "gorący":
         return base
     if klass in ("wolny", "martwy"):
@@ -217,6 +227,8 @@ def demand_text(found):
     parts.append(f"potwierdzonych sprzedaży {found.get('n_sold', 0)}")
     klass = found.get("class")
     head = f"{klass} ({CLASS_TEXT[klass]})" if klass else "za mało nowych ofert, by ocenić"
+    if found.get("note"):
+        parts.append(found["note"])
     return f"{head}: " + ", ".join(parts)
 
 

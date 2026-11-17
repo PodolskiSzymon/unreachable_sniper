@@ -17,7 +17,8 @@ CFG = SimpleNamespace(min_market_month=10.0, niche_turnover=0.10, niche_max_shar
                       demand_hot_share=0.5, demand_hot_week=3.0, demand_slow_share=0.15, demand_slow_week=2.0,
                       demand_dead_share=0.10, demand_dead_week=0.7, demand_dead_max_share=0.5,
                       demand_slow_profit=1.5, demand_hot_bonus=0.5, demand_normal_factor=1.1,
-                      demand_slow_factor=1.0, low_battery_pct=80.0, low_battery_factor=0.95, warranty_factor=1.05)
+                      demand_slow_factor=1.0, low_battery_pct=80.0, low_battery_factor=0.95, warranty_factor=1.05,
+                      demand_hot_min_sold=2, demand_no_sales_clear=10)
 
 
 def level(estimate=1000, median=1100, fresh=20, gone7=6, stale=10, active=30, gone=10, sold=0, clear=None,
@@ -134,8 +135,8 @@ def test_comparables_parts_keep_old_estimate(tmp_path):
 
 # ---------------------------------------------------------------------------------------------- klasy
 def test_demand_classes():
-    assert demand([level(fresh=8, gone7=7, days=14.6)], CFG)["class"] == "gorący"       # iPad A16
-    assert demand([level(fresh=67, gone7=16, days=14.7)], CFG)["class"] == "normalny"    # S23: 24%, 7,6 / tydz.
+    assert demand([level(fresh=8, gone7=7, days=14.6, sold=2)], CFG)["class"] == "gorący"   # iPad A16, 2 sprzedaże
+    assert demand([level(fresh=67, gone7=16, days=14.7, sold=1)], CFG)["class"] == "normalny"   # S23: 24%, 7,6 / tydz.
     assert demand([level(fresh=17, gone7=3, days=14.6)], CFG)["class"] == "wolny"       # Tab S6 Lite: 1,4 / tydz.
     assert demand([level(fresh=11, gone7=1, days=14.6)], CFG)["class"] == "martwy"      # MatePad 11
     # mało świeżych ofert: martwy tylko, gdy ≥ 70% aktywnych wisi; inaczej bez klasy
@@ -146,11 +147,27 @@ def test_demand_classes():
     assert demand([{"label": "stary plik", "n_active": 3, "n_gone": 1}], CFG) is None
 
 
+def test_disappearing_without_sales_is_not_demand():
+    """17.11: iPad 10 64 GB (kupiony ~900 zł, nie schodzi za 1100) - 8 z 12 nowych ofert zniknęło w tydzień, ale
+    żadna nie była potwierdzoną sprzedażą (usunięte / ukryte) → nie „gorący”; przy ≥ 10 takich zniknięć „wolny”."""
+    ipad10 = demand([level(fresh=12, gone7=8, days=14.7, sold=0, clear=[1100] * 9)], CFG)
+    assert ipad10["class"] == "normalny" and "potwierdzonych" in ipad10["note"]
+    many = demand([level(fresh=40, gone7=20, days=14.7, sold=0, clear=[1100] * 12)], CFG)
+    assert many["class"] == "wolny" and "bez żadnej potwierdzonej sprzedaży" in many["note"]
+    offer = phone(category="tablet", title="iPad 10 gen 64 GB")
+    assert value_factor([level(fresh=12, gone7=8, sold=0)], offer, CFG) == 1.0      # bez sprzedaży AI ≤ dane
+    # iPad 10 za 856 + wysyłka: AI 1380, szacunek 1245 → najwyżej 1245, zysk < 300 → nie okazja
+    ev = finish_medians(deal(1380), phone(category="tablet", title="iPad 10 gen", price=850.0, total_price=856.0,
+                                           description="64 GB, bateria 99%"),
+                        CFG, [level(estimate=1245, median=1335, fresh=12, gone7=8, sold=0, clear=[1245] * 6)])
+    assert ev["market_value_pln"] == 1245 and ev["is_deal"] is False
+
+
 def test_value_factor_by_class():
-    hot, slow = [level(fresh=8, gone7=7)], [level(fresh=17, gone7=3)]
+    hot, slow = [level(fresh=8, gone7=7, sold=2)], [level(fresh=17, gone7=3, sold=1)]
     offer = phone(category="tablet", title="iPad A16")
     assert value_factor(hot, offer, CFG) == 1.2
-    assert value_factor([level(fresh=67, gone7=16)], offer, CFG) == 1.1
+    assert value_factor([level(fresh=67, gone7=16, sold=1)], offer, CFG) == 1.1
     assert value_factor(slow, offer, CFG) == 1.0
     assert value_factor(hot, phone(category="tablet", title="reMarkable 2"), CFG) == 1.0      # czytnik
     assert value_factor(slow, phone(category="gpu", title="RTX 3060"), CFG) == 1.2           # poza zasięgiem

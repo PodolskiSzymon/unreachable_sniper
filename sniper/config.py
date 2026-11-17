@@ -438,6 +438,10 @@ class AiConfig:
     demand_slow_week: float = _env_float("SNIPER_DEMAND_SLOW_WEEK", 2.0)
     demand_dead_share: float = _env_float("SNIPER_DEMAND_DEAD_SHARE", 0.10)
     demand_dead_week: float = _env_float("SNIPER_DEMAND_DEAD_WEEK", 0.7)
+    # 2026-11-17 (iPad 10 64 GB): zniknięcie ≠ sprzedaż. „gorący” tylko przy ≥ HOT_MIN_SOLD potwierdzonych sprzedażach;
+    # ≥ NO_SALES_CLEAR zniknięć i żadnej sprzedaży = „wolny”; bez sprzedaży wycena AI najwyżej szacunek × SLOW_FACTOR.
+    demand_hot_min_sold: float = _env_float("SNIPER_DEMAND_HOT_MIN_SOLD", 2)
+    demand_no_sales_clear: float = _env_float("SNIPER_DEMAND_NO_SALES_CLEAR", 10)
     # Skutki klas: martwy = okazja tylko ≤ DEAD_MAX_SHARE × szacunek (też bramka przed AI); wolny = wymagany zysk
     # × SLOW_PROFIT i ocena -1; gorący = ocena + HOT_BONUS. Wycena AI najwyżej szacunek × comparable_factor (gorący),
     # × NORMAL_FACTOR (normalny / bez klasy), × SLOW_FACTOR (wolny, martwy, czytniki).
