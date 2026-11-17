@@ -978,7 +978,7 @@ class OfferEvaluator:
         # Podobne oferty z bazy analizatora (comparables.db) - mediana zamiast zgadywania ceny przez AI.
         from .comparables import Comparables
         guides_dir = getattr(cfg, "guides_dir", None)
-        self.comparables = Comparables(Path(guides_dir) / "comparables.db" if guides_dir else None)
+        self.comparables = Comparables(Path(guides_dir) / "comparables.db" if guides_dir else None, cfg=cfg)
         # AutoBuyer (sniper/autobuy.py) albo None. Okazję do kupienia przejmuje on i sam wysyła mail z wynikiem.
         self.buyer = None
         # Podgląd ocen w przeglądarce: logs/oceny.html (sniper/report.py).

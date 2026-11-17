@@ -25,7 +25,7 @@ import sqlite3
 import unicodedata
 from pathlib import Path
 
-from .config import VALUE_SHARE
+from .config import VALUE_SHARE, VALUE_SHARE_DEAD, VALUE_SHARE_HOT
 from .guides import _ALIASES, VARIANT_WORDS, tokens
 
 log = logging.getLogger("sniper.comparables")
@@ -167,7 +167,8 @@ def _pct(values, q):
 
 
 class Comparables:
-    def __init__(self, path, min_offers=8):
+    def __init__(self, path, min_offers=8, cfg=None):
+        self.cfg = cfg                   # progi klas popytu (AiConfig) - wycena „gorący” / „martwy” (apply_clearing)
         self.path = Path(path) if path else None
         self.min_offers = min_offers
         self._conn = None
@@ -275,6 +276,9 @@ class Comparables:
             db = self._db()
             if db is None or not self._rows:
                 return []
+            if category in CLEARING_CATEGORIES:
+                bare = strip_accessories(title)
+                title = bare if len(tokens(bare)) >= 2 else title     # samo „Apple Pencil 2” - zostaje jak było
             parsed = parse_title(category, title)
             words = parsed["words"]
             code_letters = {l for l, _d in parsed["codes"]}
@@ -359,7 +363,7 @@ class Comparables:
                     days = (getattr(self, "_fresh_days", None) or {}).get(category)
                     for lv in out:
                         lv["fresh_days"] = days
-                apply_clearing(out)
+                apply_clearing(out, getattr(self, "cfg", None))
             return out
         except sqlite3.Error as exc:
             log.warning("[AI] Porównywalne oferty niedostępne: %s", exc)
@@ -421,7 +425,8 @@ def _stats(active, gone, demand=None):
     mid = (p25 + med) / 2 if active else None
     estimate = max(x for x in (gone_med, mid) if x is not None) if (gone_med or mid) else None
     out = {"n_active": len(active), "n_gone": len(gone), "p25": p25, "median": med, "p75": p75,
-           "gone_median": gone_med, "estimate": estimate, "p_low": _pct(active, VALUE_SHARE)}
+           "gone_median": gone_med, "estimate": estimate, "p_low": _pct(active, VALUE_SHARE),
+           "p_hot": _pct(active, VALUE_SHARE_HOT), "p_dead": _pct(active, VALUE_SHARE_DEAD)}
     if demand is not None:
         clear = demand["clear"]
         out.update(estimate_old=estimate, n_clear=len(clear), clear_median=_pct(clear, .5),
@@ -442,7 +447,21 @@ CLEAR_RATIO_LIMITS = (0.5, 1.05)
 MIN_ACTIVE_LOW = 5        # od tylu aktywnych ofert szacunek = dolne VALUE_SHARE cen
 
 
-def apply_clearing(levels):
+# 2026-11-17 (reMarkable 2 kupiony za 1200 - „Sniper zobaczył ofertę z Type Folio dużo droższą i wycenił drogo”):
+# dodatki w tytule nie wybierają grupy porównawczej. „Marker Plus” robił z „plus” wariant (tylko oferty z „plus” =
+# komplety), „Type Folio” / „Pencil” zawężały do kompletów. Szukamy samego urządzenia; dodatki - reguła E dla AI.
+ACCESSORIES = re.compile(
+    r"(?:\+|&|\bz\b|\bwith\b|\bi\b|\boraz\b)?\s*(?:\b(?:apple\s+)?(?:magic|smart)\s+(?:keyboard|folio)(?:\s+folio)?"
+    r"|\b(?:type|book|smart)\s+folio|\bfolio\b|\bmarker(?:\s+plus)?\b|\b(?:apple\s+)?pencil(?:\s+(?:pro|usb[\s-]?c|[12]))?\b"
+    r"|\bstylus\b|\brysik\w*|\bkeyboard\b|\bklawiatur\w*|\betui\b|\bpokrowiec\w*|\bcover\b|\bcase\b)", re.I)
+
+
+def strip_accessories(title):
+    """Tytuł bez dodatków (folio, klawiatura, rysik / Pencil / Marker, etui) - do wyszukania podobnych urządzeń."""
+    return re.sub(r"\s+", " ", ACCESSORIES.sub(" ", title or "")).strip()
+
+
+def apply_clearing(levels, cfg=None):
     """Szacunek szybkiej sprzedaży (telefony, tablety, konsole). Od 2026-11-17 (pomysł użytkownika, iPad 10 64 GB:
     wycena 1380 zł, a nie schodzi za 1100) = **dolne 10% cen aktywnych ofert** tego poziomu (`p_low`,
     SNIPER_VALUE_SHARE): kupujący biorą najtańsze sensowne oferty. Kopia 07.11 (potwierdzone sprzedaże ≤ 7 dni, bez
@@ -461,10 +480,18 @@ def apply_clearing(levels):
         if widest["n_clear"] >= MIN_CLEAR and widest.get("median") and widest.get("clear_median"):
             low, high = CLEAR_RATIO_LIMITS
             ratio = min(max(widest["clear_median"] / widest["median"], low), high)
+    # Klasa popytu (sniper/market.py: demand) zmienia kwantyl: gorący → dolne 25%, martwy → dolne 5% (17.11).
+    klass = None
+    if with_data and (cfg is None or getattr(cfg, "demand_rules", True)):
+        from .market import demand
+        klass = (demand(levels, cfg) or {}).get("class")
+    key, share = {"gorący": ("p_hot", VALUE_SHARE_HOT), "martwy": ("p_dead", VALUE_SHARE_DEAD)}.get(
+        klass, ("p_low", VALUE_SHARE))
     for lv in levels:
         old = lv.get("estimate_old")
-        if lv.get("n_active", 0) >= MIN_ACTIVE_LOW and lv.get("p_low"):
-            estimate, basis = lv["p_low"], f"dolne {VALUE_SHARE * 100:.0f}% cen aktywnych ofert"
+        if lv.get("n_active", 0) >= MIN_ACTIVE_LOW and lv.get(key):
+            estimate, basis = lv[key], f"dolne {share * 100:.0f}% cen aktywnych ofert" + (
+                f" - popyt {klass}" if key != "p_low" else "")
         elif lv.get("n_clear", 0) >= MIN_CLEAR and lv.get("clear_median"):
             estimate, basis = lv["clear_median"], f"mediana {lv['n_clear']} ofert, które zeszły"
         else:

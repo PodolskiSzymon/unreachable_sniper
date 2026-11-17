@@ -177,6 +177,10 @@ SHIPPING_FALLBACK_PLN = _env_float("SNIPER_SHIPPING_FALLBACK_PLN", 35.0)
 # konsole - szacunek sprzedaży = cena, poniżej której jest tylko tyle ofert aktywnych tego modelu (dolne 10%). Na
 # kopii 07.11: 70% potwierdzonych sprzedaży ≤ 7 dni było po tej cenie albo drożej (dawny szacunek: 33%).
 VALUE_SHARE = _env_float("SNIPER_VALUE_SHARE", 0.10)
+# 2026-11-17 (użytkownik: „jeśli model dobrze schodzi, to wartość rośnie”): klasa popytu „gorący” (≥ 2 potwierdzone
+# sprzedaże, ≥ 50% nowych ofert znika w tydzień) → dolne 25%, „martwy” → dolne 5%; pozostałe - VALUE_SHARE.
+VALUE_SHARE_HOT = _env_float("SNIPER_VALUE_SHARE_HOT", 0.25)
+VALUE_SHARE_DEAD = _env_float("SNIPER_VALUE_SHARE_DEAD", 0.05)
 # Nowy endpoint katalogu (Vinted przeniósł listę z www.vinted.pl/api/v2/catalog/items)
 CATALOG_URL = "https://api.vinted.pl/svc-catalogue/items"
 SIDEBAR_URL = BASE_URL + "/api/v2/items/{item_id}/details/sidebar"

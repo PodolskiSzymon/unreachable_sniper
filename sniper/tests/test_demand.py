@@ -277,3 +277,43 @@ def test_http_error_log_is_readable(caplog):
     line = next(r.getMessage() for r in caplog.records if "[HTTP]" in r.getMessage())
     assert "404 www.vinted.fr/api/v2/items/1/shipping_details (przekierowanie z www.vinted.pl)" in line
     assert "strona HTML „La page n'existe pas”" in line and "hreflang" not in line
+
+
+
+# ---------------------------------------------------------------------------------------------- 17.11
+def test_strip_accessories():
+    from sniper.comparables import strip_accessories
+    assert strip_accessories("reMarkable 2 + Type Folio + Marker Plus") == "reMarkable 2"
+    assert strip_accessories("iPad Air 5 64GB + Apple Pencil 2") == "iPad Air 5 64GB"
+    assert strip_accessories("Galaxy Tab S9 FE z etui i rysikiem") == "Galaxy Tab S9 FE"
+    assert strip_accessories("iPad Pro 11 M1 Magic Keyboard") == "iPad Pro 11 M1"
+    assert strip_accessories("iPhone 15 Plus 128GB") == "iPhone 15 Plus 128GB"          # Plus modelu zostaje
+
+
+def test_bundle_words_do_not_pick_the_group(tmp_path):
+    """reMarkable 2 + Marker Plus: dawniej „plus” był wariantem i grupę tworzyły tylko drogie komplety."""
+    rows = [(f"reMarkable 2 tablet {i}", "tablet", 1100 + 20 * i, 0, (0, 0, 0, 0, 0)) for i in range(12)]
+    rows += [(f"reMarkable 2 + Type Folio + Marker Plus {i}", "tablet", 2100 + 20 * i, 0, (0, 0, 0, 0, 0))
+             for i in range(10)]
+    rows += [(f"Lenovo Tab P{i} 64GB", "tablet", 500 + i, 0, (0, 0, 0, 0, 0)) for i in range(150)]
+    _demand_db(tmp_path / "comparables.db", rows)
+    lv = Comparables(tmp_path / "comparables.db").levels("tablet", "reMarkable 2 + Type Folio + Marker Plus",
+                                                          "Bardzo dobry")
+    assert lv and lv[0]["estimate"] < 1300                       # wycena urządzenia, nie kompletu po ~2100+
+
+
+def test_value_percentile_rises_for_hot_models():
+    """17.11 (użytkownik: „jeśli model dobrze schodzi, to wartość rośnie”): gorący → dolne 25%, martwy → dolne 5%."""
+    def lv(**kw):
+        base = level(estimate=1700, median=1800, **kw)
+        base.update(p_low=1330, p_hot=1550, p_dead=1200)
+        return base
+    hot = [lv(fresh=8, gone7=7, sold=2)]
+    apply_clearing(hot, CFG)
+    assert hot[0]["estimate"] == 1550 and "gorący" in hot[0]["estimate_basis"]
+    normal = [lv(fresh=67, gone7=16, sold=1)]
+    assert apply_clearing(normal, CFG)[0]["estimate"] == 1330
+    dead = [lv(fresh=11, gone7=1)]
+    assert apply_clearing(dead, CFG)[0]["estimate"] == 1200
+    no_sales = [lv(fresh=8, gone7=7, sold=0)]                    # znika, ale bez sprzedaży - nie „gorący”
+    assert apply_clearing(no_sales, CFG)[0]["estimate"] == 1330
