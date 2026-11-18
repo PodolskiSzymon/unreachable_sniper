@@ -27,9 +27,18 @@ def test_only_scores_above_threshold():
 def test_card_shows_valuation_and_verdict():
     html = render([rec(9, deal=True)], 5)
     assert "9<small>/10</small>" in html and "OKAZJA" in html
-    for text in ("1 800 zł", "1 950 zł", "3 100 zł", "1 150 zł"):   # cena, maks., wartość, zysk
+    # koszt = 1800 (cena 1785 + wysyłka 15) + opłata 5% + 2,90 = 1892 zł; maks., wartość, zysk
+    for text in ("1 892 zł", "1 950 zł", "3 100 zł", "1 150 zł"):
         assert text in html
     assert "Cena poniżej progu." in html and 'class="under"' in html
+
+
+def test_card_cost_includes_buyer_fee():
+    """Pamięć DDR5 z 18.11: cena 1050 + wysyłka 15 = 1065, ale z opłatą 1120 zł > maks. 1048 zł."""
+    html = render([rec(5, total=1065.0, max_buy_price_pln=1048)], 2)
+    assert "1 120 zł" in html and "1 065 zł" not in html and 'class="over"' in html
+    html = render([rec(8, deal=True, total=915.0, max_buy_price_pln=1048)], 2)   # po obniżce do 900 zł: 962,90
+    assert "963 zł" in html and 'class="under"' in html
 
 
 def test_seller_text_is_escaped_and_bad_urls_dropped():

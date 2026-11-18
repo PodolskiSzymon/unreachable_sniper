@@ -85,9 +85,11 @@ def _card(record):
     offer = record.get("offer") or {}
     score = _num(ev.get("score")) or 0
     deal = bool(ev.get("is_deal"))
-    total = _num(offer.get("total_price"))
-    if total is None:
-        total = _num(offer.get("price"))
+    # 18.11: koszt zakupu z opłatą Vinted dla kupującego - tak samo jak „Maks. cena zakupu” w regule zysku
+    # (evaluator.enforce_profit_rule: purchase_cost). Dawniej kafelek „Cena łączna” = cena + wysyłka bez opłaty,
+    # więc porównanie z maks. ceną wyglądało korzystniej niż było (np. 1065 zł zamiast 1120 zł).
+    from .extractor import purchase_cost
+    total = _num(purchase_cost(offer))
     market = _num(ev.get("market_value_pln"))
     max_buy = _num(ev.get("max_buy_price_pln"))
     profit = _num(ev.get("potential_profit_pln"))
@@ -120,7 +122,7 @@ def _card(record):
     <h2><a href="{e(url)}" target="_blank" rel="noopener">{e(title)}</a></h2>
     <p class="spec">{e(' · '.join(x for x in (offer.get('category'), gpu, ev.get('laptop_model')) if x))}</p>
     <dl class="money">
-      <div><dt>Cena łączna</dt><dd class="{'under' if under else 'over' if max_buy is not None and total is not None else ''}">{_pln(total)}</dd></div>
+      <div><dt>Koszt z opłatą</dt><dd class="{'under' if under else 'over' if max_buy is not None and total is not None else ''}">{_pln(total)}</dd></div>
       <div><dt>Maks. cena zakupu</dt><dd>{_pln(max_buy)}</dd></div>
       <div><dt>Wartość rynkowa (AI)</dt><dd>{_pln(market)}</dd></div>
       <div><dt>Potencjalny zysk</dt><dd class="{'pos' if (profit or 0) > 0 else 'neg' if profit is not None else ''}">{_pln(profit)}</dd></div>
