@@ -25,7 +25,7 @@ import sqlite3
 import unicodedata
 from pathlib import Path
 
-from .config import VALUE_SHARE, VALUE_SHARE_DEAD, VALUE_SHARE_HOT
+from .config import LAPTOP_VALUE_SHARE, VALUE_SHARE, VALUE_SHARE_DEAD, VALUE_SHARE_HOT
 from .guides import _ALIASES, VARIANT_WORDS, tokens
 
 log = logging.getLogger("sniper.comparables")
@@ -426,7 +426,8 @@ def _stats(active, gone, demand=None):
     estimate = max(x for x in (gone_med, mid) if x is not None) if (gone_med or mid) else None
     out = {"n_active": len(active), "n_gone": len(gone), "p25": p25, "median": med, "p75": p75,
            "gone_median": gone_med, "estimate": estimate, "p_low": _pct(active, VALUE_SHARE),
-           "p_hot": _pct(active, VALUE_SHARE_HOT), "p_dead": _pct(active, VALUE_SHARE_DEAD)}
+           "p_hot": _pct(active, VALUE_SHARE_HOT), "p_dead": _pct(active, VALUE_SHARE_DEAD),
+           "p_laptop": _pct(active, LAPTOP_VALUE_SHARE)}
     if demand is not None:
         clear = demand["clear"]
         out.update(estimate_old=estimate, n_clear=len(clear), clear_median=_pct(clear, .5),
@@ -531,6 +532,26 @@ def apply_clearing(levels, cfg=None):
             estimate, basis = min(options, key=lambda o: o[0])
         caps = [x for x in (old, lv.get("median")) if x]
         lv.update(estimate=min(estimate, max(caps)) if caps else estimate, estimate_basis=basis, clear_ratio=ratio)
+    return levels
+
+
+def apply_laptop_fast(levels):
+    """Laptop po specyfikacji (2026-11-18, użytkownik: „chciałbym patrzeć na szybkie sprzedaże”): szacunek = cena
+    szybkiej sprzedaży = dolne LAPTOP_VALUE_SHARE (20%) cen aktywnych ofert poziomu (przy < MIN_ACTIVE_LOW aktywnych -
+    p25), nigdy wyżej niż dawny szacunek. Mediana samych szybkich sprzedaży per specyfikacja odpada - w teście tylko 16 z
+    88 grup miało ≥ 5 takich ofert. Poziomy dostają "laptop_fast" - market.value_factor: wycena AI ≤ szacunek × 1,1."""
+    for lv in levels or []:
+        old = lv.setdefault("estimate_old", lv.get("estimate"))
+        if lv.get("n_active", 0) >= MIN_ACTIVE_LOW and lv.get("p_laptop"):
+            estimate, basis = lv["p_laptop"], (f"dolne {LAPTOP_VALUE_SHARE * 100:.0f}% cen aktywnych ofert - po tyle "
+                                               "laptopy schodzą w ≤ 3 dni")
+        elif lv.get("p25"):
+            estimate, basis = lv["p25"], "p25 aktywnych (mało ofert)"
+        else:
+            estimate, basis = None, None
+        if estimate:
+            lv.update(estimate=min(estimate, old) if old else estimate, estimate_basis=basis)
+        lv["laptop_fast"] = True
     return levels
 
 

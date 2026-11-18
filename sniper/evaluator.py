@@ -1300,11 +1300,16 @@ class OfferEvaluator:
         return cache[offer.id]
 
     def _age(self, offer, spec, levels):
-        """Stary laptop (sniper/market.py: old_laptop, 2026-11-18) → szacunek z dolnych 10% cen ofert."""
-        from .comparables import apply_old_laptop
+        """Wycena laptopa po specyfikacji (2026-11-18): stary (sniper/market.py: old_laptop) → dolne 10% cen ofert,
+        inny → cena szybkiej sprzedaży = dolne 20% (comparables.apply_laptop_fast)."""
+        from .comparables import apply_laptop_fast, apply_old_laptop
         from .market import old_laptop
-        reason = old_laptop(offer, spec, self.cfg) if levels else None
-        return apply_old_laptop(levels, reason) if reason else levels
+        if not levels:
+            return levels
+        reason = old_laptop(offer, spec, self.cfg)
+        if reason:
+            return apply_old_laptop(levels, reason)
+        return apply_laptop_fast(levels) if getattr(self.cfg, "laptop_value_rules", True) else levels
 
     def lookup_comparables(self, offer):
         cache = self.__dict__.setdefault("_comps_cache", {})

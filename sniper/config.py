@@ -184,6 +184,11 @@ VALUE_SHARE = _env_float("SNIPER_VALUE_SHARE", 0.10)
 # sprzedaże, ≥ 50% nowych ofert znika w tydzień) → dolne 25%, „martwy” → dolne 5%; pozostałe - VALUE_SHARE.
 VALUE_SHARE_HOT = _env_float("SNIPER_VALUE_SHARE_HOT", 0.25)
 VALUE_SHARE_DEAD = _env_float("SNIPER_VALUE_SHARE_DEAD", 0.05)
+# 2026-11-18 (użytkownik: przy laptopach „chciałbym patrzeć na szybkie sprzedaże”): laptopy po specyfikacji -
+# szacunek = dolne 20% cen aktywnych ofert poziomu. Test na kopii 07.11 (szacunek z danych do 27.10, 88 szybkich
+# sprzedaży używanych laptopów 28.10-07.11): mediana cena / dolne 20% = 1,00 (połowa po tej cenie albo drożej; karta,
+# procesor i MacBooki tak samo), dawny szacunek - 0,92 (tylko 28% po nim albo drożej), mediana aktywnych - 20%.
+LAPTOP_VALUE_SHARE = _env_float("SNIPER_LAPTOP_VALUE_SHARE", 0.20)
 # Nowy endpoint katalogu (Vinted przeniósł listę z www.vinted.pl/api/v2/catalog/items)
 CATALOG_URL = "https://api.vinted.pl/svc-catalogue/items"
 SIDEBAR_URL = BASE_URL + "/api/v2/items/{item_id}/details/sidebar"
@@ -471,6 +476,10 @@ class AiConfig:
     # 2026-11-18 (użytkownik: „stare MacBooki słabo schodzą”): laptop z Intelem do 7. generacji bez osobnej karty
     # (także MacBook z Intelem do 2017) → wycena = dolne 10% cen aktywnych ofert, AI najwyżej tyle (market.old_laptop).
     old_laptop_rules: bool = _env_bool("SNIPER_OLD_LAPTOP_RULES", True)
+    # Laptopy (2026-11-18): szacunek = cena szybkiej sprzedaży (dolne SNIPER_LAPTOP_VALUE_SHARE cen aktywnych), wycena
+    # AI najwyżej szacunek × LAPTOP_VALUE_FACTOR (26% szybkich sprzedaży było ≥ 1,1 × szacunek). false = jak dawniej.
+    laptop_value_rules: bool = _env_bool("SNIPER_LAPTOP_VALUE_RULES", True)
+    laptop_value_factor: float = _env_float("SNIPER_LAPTOP_VALUE_FACTOR", 1.1)
 
     # Mail tylko gdy ocena >= min_score; notify_all=true -> mail o każdej ofercie (z oceną albo bez).
     min_score: float = _env_float("SNIPER_AI_MIN_SCORE", 7.0)

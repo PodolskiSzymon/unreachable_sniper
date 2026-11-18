@@ -281,10 +281,32 @@ def test_old_laptop_valued_at_low_prices_gate_and_cap(tmp_path):
     ev = record["evaluation"]
     assert ev["market_value_pln"] == 733 and ev["max_buy_price_pln"] == 387
     assert any("stary laptop" in f for f in ev["red_flags"])
-    # nowszy procesor - bez zmian (szacunek jak dawniej, wycena AI × 1,2)
+    # nowszy procesor - nie „stary”: cena szybkiej sprzedaży = dolne 20% (600…710 zł → 622 zamiast ~641)
     newer = evaluator.levels(laptop(id=14, category="laptop", title="Dell i5-8350U 8GB 256GB SSD"))
-    assert newer and not newer[0].get("old_laptop") and newer[0]["estimate"] == newer[0].get("estimate_old",
-                                                                                              newer[0]["estimate"])
+    assert newer and not newer[0].get("old_laptop") and newer[0]["laptop_fast"]
+    assert round(newer[0]["estimate"]) == 622 and round(newer[0]["estimate_old"]) == 641
+
+
+def test_laptop_valued_at_fast_sale_price(tmp_path):
+    """2026-11-18 (użytkownik: „chciałbym patrzeć na szybkie sprzedaże”): laptop - szacunek = dolne 20% cen aktywnych
+    (po tyle schodzą w ≤ 3 dni), wycena AI najwyżej × 1,1; dopisek dla AI. Wyłączalne SNIPER_LAPTOP_VALUE_RULES."""
+    _setup(tmp_path)
+    client = FakeClient(response({**MEDIANS_DEAL, "market_value_pln": 3300}))
+    evaluator = OfferEvaluator(ai_cfg(tmp_path, eval_mode="mediany"), FakeNotifier(), client=client)
+    offer = laptop(category="laptop", title="Lenovo Legion 5 RTX 3060 16GB 512GB", description="Ryzen 7 5800H",
+                   price=1800.0, total_price=1815.0)
+    levels = evaluator.levels(offer)
+    assert round(levels[0]["estimate"]) == 2944 and "dolne 20%" in levels[0]["estimate_basis"]   # 2900…3120 zł
+    record = run(evaluator.evaluate(offer))
+    task = client.calls[0]["messages"][0]["content"][-1]["text"]
+    assert "cena szybkiej sprzedaży" in task
+    ev = record["evaluation"]
+    assert ev["market_value_pln"] == 3238 and ev["market_value_ai"] == 3300          # 2944 × 1,1
+    off = OfferEvaluator(ai_cfg(tmp_path, eval_mode="mediany", laptop_value_rules=False), FakeNotifier(),
+                         client=FakeClient())
+    plain = off.levels(laptop(id=2, category="laptop", title="Lenovo Legion 5 RTX 3060 16GB 512GB",
+                              description="Ryzen 7 5800H"))
+    assert not plain[0].get("laptop_fast") and plain[0]["estimate"] > 2944
 
 
 def test_old_laptop_rule_can_be_turned_off(tmp_path):

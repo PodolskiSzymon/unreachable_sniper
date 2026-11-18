@@ -240,6 +240,8 @@ def value_factor(levels, offer, cfg):
         return slow
     if old_reason(levels):
         return slow               # stary laptop (2026-11-18): wycena AI najwyżej dolne 10% cen ofert
+    if any(lv.get("laptop_fast") for lv in levels or []):
+        return min(base, getattr(cfg, "laptop_value_factor", 1.1) or base)   # laptop: cena szybkiej sprzedaży × 1,1
     found = demand(levels, cfg) if demand_on(offer, cfg) else None
     if found is None:
         return base
@@ -326,6 +328,11 @@ def market_note(levels, offer, cfg, span_days=None):
         lines.append("Czytnik / tablet graficzny: znikome zapotrzebowanie na rynku - sprzedaż trwa długo; okazja tylko "
                      "przy cenie dużo niższej od mediany.")
     old = old_reason(levels)
+    if not old and any(lv.get("laptop_fast") for lv in levels or []):
+        lines.append("Laptop: szacunek w medianach = cena szybkiej sprzedaży (dolne 20% cen aktywnych ofert tej "
+                     "specyfikacji - po tyle laptopy schodzą w ≤ 3 dni; połowa szybkich sprzedaży była po tej cenie albo "
+                     "drożej, tylko co czwarta ≥ 1,1 × tyle). Wyżej najwyżej o 10% i tylko z wyraźnym powodem (lepsza "
+                     "konfiguracja niż w grupie, gwarancja, bardzo dobry stan z pudełkiem).")
     if old:
         lines.append(f"Stary laptop ({old}): takie schodzą wolno (nowa oferta znika w tydzień w 5-23% przypadków, "
                      "MacBook z M1 / M2 w ~40%), a większość z nich kosztuje poniżej 700 zł - progu, od którego baza "
