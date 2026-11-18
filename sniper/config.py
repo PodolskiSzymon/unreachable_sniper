@@ -468,6 +468,9 @@ class AiConfig:
     low_battery_pct: float = _env_float("SNIPER_LOW_BATTERY_PCT", 80.0)
     low_battery_factor: float = _env_float("SNIPER_LOW_BATTERY_FACTOR", 0.95)
     warranty_factor: float = _env_float("SNIPER_WARRANTY_FACTOR", 1.05)
+    # 2026-11-18 (użytkownik: „stare MacBooki słabo schodzą”): laptop z Intelem do 7. generacji bez osobnej karty
+    # (także MacBook z Intelem do 2017) → wycena = dolne 10% cen aktywnych ofert, AI najwyżej tyle (market.old_laptop).
+    old_laptop_rules: bool = _env_bool("SNIPER_OLD_LAPTOP_RULES", True)
 
     # Mail tylko gdy ocena >= min_score; notify_all=true -> mail o każdej ofercie (z oceną albo bez).
     min_score: float = _env_float("SNIPER_AI_MIN_SCORE", 7.0)

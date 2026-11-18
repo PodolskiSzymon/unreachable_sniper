@@ -1156,7 +1156,9 @@ class OfferEvaluator:
         cost, factor = _offer_price(offer), getattr(self.cfg, "comparable_factor", 1.2)
         if self.spec_mode(offer):
             # Laptop: mediany po specyfikacji; najwyższy szacunek z poziomów (AI może wybrać ogólniejszy).
+            from .market import value_factor
             estimates = [lv["estimate"] for lv in self.levels(offer) if lv.get("estimate")]
+            factor = value_factor(self.levels(offer), offer, self.cfg)       # stary laptop: × 1,0 (2026-11-18)
             limit = rule_max_buy(max(estimates) * factor, self.cfg) if estimates and factor else None
             if limit is not None and cost is not None and cost > limit:
                 from .specs import describe as spec_text
@@ -1289,11 +1291,20 @@ class OfferEvaluator:
             if comparables is None:
                 cache[offer.id] = []
             elif self.spec_mode(offer):
-                cache[offer.id] = comparables.spec_levels(self.spec(offer), getattr(offer, "condition", None))
+                spec = self.spec(offer)
+                cache[offer.id] = self._age(offer, spec, comparables.spec_levels(spec, getattr(offer, "condition",
+                                                                                                None)))
             else:
                 cache[offer.id] = comparables.levels(getattr(offer, "category", None), lookup_title(offer),
                                                      getattr(offer, "condition", None))
         return cache[offer.id]
+
+    def _age(self, offer, spec, levels):
+        """Stary laptop (sniper/market.py: old_laptop, 2026-11-18) → szacunek z dolnych 10% cen ofert."""
+        from .comparables import apply_old_laptop
+        from .market import old_laptop
+        reason = old_laptop(offer, spec, self.cfg) if levels else None
+        return apply_old_laptop(levels, reason) if reason else levels
 
     def lookup_comparables(self, offer):
         cache = self.__dict__.setdefault("_comps_cache", {})
@@ -1541,12 +1552,13 @@ class OfferEvaluator:
         merged = merge(text_spec, spec_from_ai(found, offer.title))
         if not merged or same(merged, text_spec) or (self.levels(offer) and not significant(text_spec, merged)):
             return None
-        levels = self.comparables.spec_levels(merged, getattr(offer, "condition", None))
+        levels = self._age(offer, merged, self.comparables.spec_levels(merged, getattr(offer, "condition", None)))
         if not levels:
             return None
         done.add(offer.id)
+        from .market import value_factor
         estimates = [lv["estimate"] for lv in levels if lv.get("estimate")]
-        cost, factor = _offer_price(offer), getattr(self.cfg, "comparable_factor", 1.2)
+        cost, factor = _offer_price(offer), value_factor(levels, offer, self.cfg)
         limit = rule_max_buy(max(estimates) * factor, self.cfg) if estimates and factor else None
         if limit is not None and cost is not None and cost > limit:
             log.info("[AI] %s: specyfikacja od AI (%s) - za drogo wg jej median (%.0f > %.0f zł), bez ponownej oceny.",

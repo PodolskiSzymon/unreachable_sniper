@@ -534,6 +534,24 @@ def apply_clearing(levels, cfg=None):
     return levels
 
 
+def apply_old_laptop(levels, reason):
+    """Stary laptop (market.old_laptop, 2026-11-18): szacunek = dolne VALUE_SHARE cen aktywnych ofert poziomu (przy
+    < MIN_ACTIVE_LOW aktywnych - p25), nigdy wyżej niż dawny szacunek; poziomy dostają "old_laptop" (= opis) - po nim
+    market.value_factor przycina wycenę AI do szacunku × 1,0. → ta sama lista (zmieniona w miejscu)."""
+    for lv in levels or []:
+        old = lv.setdefault("estimate_old", lv.get("estimate"))
+        if lv.get("n_active", 0) >= MIN_ACTIVE_LOW and lv.get("p_low"):
+            estimate, basis = lv["p_low"], f"dolne {VALUE_SHARE * 100:.0f}% cen aktywnych ofert - {reason}"
+        elif lv.get("p25"):
+            estimate, basis = lv["p25"], f"p25 aktywnych (mało ofert) - {reason}"
+        else:
+            estimate, basis = None, None
+        if estimate:
+            lv.update(estimate=min(estimate, old) if old else estimate, estimate_basis=basis)
+        lv["old_laptop"] = reason
+    return levels
+
+
 def describe_levels(levels):
     """Tekst dla modelu (<mediany>) - kilka median od szczegółowej do ogólnej."""
     if not levels:

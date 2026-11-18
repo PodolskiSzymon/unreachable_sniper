@@ -229,3 +229,79 @@ def test_anthropic_download_mode_sends_photos_in_request(tmp_path):
     images = [c for c in content if c["type"] == "image"]
     assert photos == 2 and [i["source"]["type"] for i in images] == ["base64", "base64"]
     assert images[0]["source"]["media_type"] == "image/webp"
+
+
+# ----------------------------------------------------------------------------- stare laptopy (2026-11-18)
+def _old_setup(tmp_path):
+    """Rynek z laptopami z Intelem 6. gen. 8 GB / 256 GB: 700…1030 zł → p10 733, dawny szacunek (p25+med)/2 ≈ 824."""
+    (tmp_path / "guides").mkdir()
+    old = [(None, "intel core i5", "do 7 gen.", None, None, 8, 256, 700 + 30 * i, 0) for i in range(12)]
+    _specs_db(tmp_path / "guides" / "comparables.db", _market() + old)
+    (tmp_path / "guides" / "laptop.md").write_text("# Laptopy\n", encoding="utf-8")
+
+
+def test_old_laptop_by_age_only():
+    from types import SimpleNamespace
+
+    from sniper.market import old_laptop
+    offer = lambda title, category="laptop": SimpleNamespace(category=category, title=title)  # noqa: E731
+    assert old_laptop(offer("MacBook Air 13 Early 2015 8GB 256GB")) == "MacBook z Intelem (2015)"
+    assert old_laptop(offer("Apple Mac Book Pro 13 2017")) == "MacBook z Intelem (2017)"
+    assert old_laptop(offer("MacBook Air M1 2020 8/256")) is None                 # Apple M - nowy
+    assert old_laptop(offer("MacBook Pro 2019 i7 16GB")) is None                  # Intel 8-9 gen. schodzi normalnie
+    assert old_laptop(offer("Dell"), {"cpu_gen": "do 7 gen.", "line": None}) == \
+        "laptop z procesorem Intel do 7. generacji"
+    assert old_laptop(offer("MacBook Air"), {"cpu_gen": "do 7 gen.", "line": "macbook air"}) == \
+        "MacBook z Intelem do 2017"
+    assert old_laptop(offer("Dell"), {"cpu_gen": "8–9 gen."}) is None
+    assert old_laptop(offer("MSI GTX 1050"), {"cpu_gen": "do 7 gen.", "gpu": "gtx 1050"}) is None   # z kartą - nie
+    assert old_laptop(offer("MacBook Air 2015", category="tablet")) is None
+    assert old_laptop(offer("MacBook Air 2015"), cfg=SimpleNamespace(old_laptop_rules=False)) is None
+
+
+def test_old_laptop_valued_at_low_prices_gate_and_cap(tmp_path):
+    """Stary laptop: szacunek = dolne 10% (733 zł zamiast ~824), wycena AI najwyżej × 1,0, bramka liczy od tego."""
+    _old_setup(tmp_path)
+    old_ai = {**MEDIANS_DEAL, "market_value_pln": 820,
+              "laptop_specs": {"gpu": None, "cpu": "i5-6300U", "ram_gb": 8, "ssd_gb": 256, "source": "tekst"}}
+    client = FakeClient(response(old_ai))
+    evaluator = OfferEvaluator(ai_cfg(tmp_path, eval_mode="mediany"), FakeNotifier(), client=client)
+    title = "Dell Latitude E7470 i5-6300U 8GB 256GB SSD"
+    levels = evaluator.levels(laptop(id=11, category="laptop", title=title))
+    assert levels[0]["old_laptop"] and round(levels[0]["estimate"]) == 733
+    assert round(levels[0]["estimate_old"]) == 824 and "dolne 10%" in levels[0]["estimate_basis"]
+    # koszt 438 zł: dawniej max zakup 642 zł (824 × 1,2) - przepuszczony; teraz 387 zł (733 × 1,0) - pominięty
+    mid = laptop(id=12, category="laptop", title=title, price=400.0, total_price=415.0)
+    assert evaluator.gate(mid).startswith("za drogo wg median specyfikacji")
+    cheap = laptop(id=13, category="laptop", title=title, price=300.0, total_price=315.0)
+    assert evaluator.gate(cheap) is None
+    record = run(evaluator.evaluate(cheap))
+    task = client.calls[0]["messages"][0]["content"][-1]["text"]
+    assert "Stary laptop (laptop z procesorem Intel do 7. generacji)" in task and "dolne 10%" in task
+    ev = record["evaluation"]
+    assert ev["market_value_pln"] == 733 and ev["max_buy_price_pln"] == 387
+    assert any("stary laptop" in f for f in ev["red_flags"])
+    # nowszy procesor - bez zmian (szacunek jak dawniej, wycena AI × 1,2)
+    newer = evaluator.levels(laptop(id=14, category="laptop", title="Dell i5-8350U 8GB 256GB SSD"))
+    assert newer and not newer[0].get("old_laptop") and newer[0]["estimate"] == newer[0].get("estimate_old",
+                                                                                              newer[0]["estimate"])
+
+
+def test_old_laptop_rule_can_be_turned_off(tmp_path):
+    _old_setup(tmp_path)
+    evaluator = OfferEvaluator(ai_cfg(tmp_path, eval_mode="mediany", old_laptop_rules=False), FakeNotifier(),
+                               client=FakeClient())
+    mid = laptop(id=12, category="laptop", title="Dell Latitude E7470 i5-6300U 8GB 256GB SSD", price=400.0,
+                 total_price=415.0)
+    assert evaluator.gate(mid) is None and not evaluator.levels(mid)[0].get("old_laptop")
+
+
+def test_notebook_and_chromebook_are_not_readers():
+    """„e-book” w LOW_DEMAND łapał „Notebook” / „Chromebook” - laptop tracił okazję poza ceną ≤ 30% szacunku."""
+    from types import SimpleNamespace
+
+    from sniper.market import low_demand
+    for title in ("Notebook Lenovo ThinkPad T480", "HP Chromebook 14", "Acer Notebook 15"):
+        assert not low_demand(SimpleNamespace(title=title))
+    for title in ("Kindle Paperwhite", "Czytnik e-book PocketBook", "ebook reader Tolino", "czytnik e-ink"):
+        assert low_demand(SimpleNamespace(title=title))

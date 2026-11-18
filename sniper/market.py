@@ -124,14 +124,52 @@ MIN_TRUSTED = 15          # od tylu ofert modelu rotacja jest wiarygodna
 # znikome (reMarkable 2 z folio wisi, choć cena „jak inne”). Zawsze okazja tylko przy cenie ≤
 # SNIPER_LOW_DEMAND_MAX_SHARE (0,3) szacunku sprzedaży - reMarkable 2 przy ~1500 zł → ~450 zł.
 LOW_DEMAND = re.compile(
-    r"remarkable|kindle|\bkobo\b|pocketbook|\bboox\b|\bonyx\b|tolino|czytni[kc]|e-?book|e-?reader|e-?ink"
+    r"remarkable|kindle|\bkobo\b|pocketbook|\bboox\b|\bonyx\b|tolino|czytni[kc]|\be-?book|\be-?reader|\be-?ink\b"
     r"|\bwacom\b|cintiq|intuos|\bhuion\b|xp-?pen|kamvas|tablet\s+graficzny|graphic\s+tablet|drawing\s+tablet",
     re.I)
 
 
 def low_demand(offer):
-    """Czytnik / tablet graficzny (tytuł) - towar o znikomym popycie."""
+    """Czytnik / tablet graficzny (tytuł) - towar o znikomym popycie. 2026-11-18: „e-book” tylko od początku słowa -
+    „Notebook” i „Chromebook” łapały się jako czytnik (laptop tracił okazję poza ceną ≤ 30% szacunku)."""
     return bool(LOW_DEMAND.search(getattr(offer, "title", "") or ""))
+
+
+# 2026-11-18 (decyzja użytkownika: dolne 10% cen „tylko jeśli chodzi o wiek, bo te stare MacBooki słabo schodzą”).
+# Kopia 07.11, używane laptopy bez osobnej karty - nowa oferta znika w tydzień: Intel ≤ 5 gen. 5%, 6-7 gen. 11%,
+# MacBook z Intelem ≤ 2015 16%, 2016-17 23%; dla porównania MacBook M1 38%, M2+ 40%, Intel 8-9 gen. 23%, 12+ gen. 25%.
+# Do tego 35-73% ofert tych roczników kosztuje < 700 zł - poniżej progu crawla analizatora (laptopy od 700 zł), więc
+# mediany z bazy pokazują tylko droższą część rynku (MacBook ≤ 2015: mediana ≥ 700 zł 889 zł, całego rynku 535 zł).
+# Stary = Intel do 7. generacji bez osobnej karty (także MacBooki z Intelem do 2017 - mają procesory 5-7 gen.).
+# Laptopy z kartą (GTX 9xx / 10xx też) schodzą jak nowsze (28% w tydzień) - bez zmian.
+OLD_CPU_GEN = "do 7 gen."
+APPLE_SILICON = re.compile(r"\bm[1-5]\b")
+MAC_YEAR = re.compile(r"\b(20(?:0[6-9]|1\d|2[0-5]))\b")
+
+
+def old_laptop(offer, spec=None, cfg=None):
+    """Stary laptop, który schodzi wolno (wycena = dolne 10% cen aktywnych ofert) → opis albo None."""
+    if cfg is not None and not getattr(cfg, "old_laptop_rules", True):
+        return None
+    if getattr(offer, "category", None) != "laptop":
+        return None
+    spec = spec or {}
+    if spec.get("gpu") or spec.get("chip"):
+        return None
+    if spec.get("cpu_gen") == OLD_CPU_GEN:
+        return "MacBook z Intelem do 2017" if spec.get("line") else "laptop z procesorem Intel do 7. generacji"
+    from .specs import norm
+    title = norm(getattr(offer, "title", ""))
+    if re.search(r"mac\s*book", title) and not APPLE_SILICON.search(title):
+        years = [int(y) for y in MAC_YEAR.findall(title)]
+        if years and max(years) <= 2017:
+            return f"MacBook z Intelem ({max(years)})"
+    return None
+
+
+def old_reason(levels):
+    """Opis starego laptopa z poziomów median (comparables.apply_old_laptop) albo None."""
+    return next((lv["old_laptop"] for lv in levels or [] if lv.get("old_laptop")), None)
 
 
 def in_scope(offer, cfg):
@@ -200,6 +238,8 @@ def value_factor(levels, offer, cfg):
     slow = min(base, getattr(cfg, "demand_slow_factor", 1.0) or base)
     if low_demand(offer) and getattr(cfg, "demand_rules", True):
         return slow
+    if old_reason(levels):
+        return slow               # stary laptop (2026-11-18): wycena AI najwyżej dolne 10% cen ofert
     found = demand(levels, cfg) if demand_on(offer, cfg) else None
     if found is None:
         return base
@@ -285,6 +325,12 @@ def market_note(levels, offer, cfg, span_days=None):
     if low_demand(offer):
         lines.append("Czytnik / tablet graficzny: znikome zapotrzebowanie na rynku - sprzedaż trwa długo; okazja tylko "
                      "przy cenie dużo niższej od mediany.")
+    old = old_reason(levels)
+    if old:
+        lines.append(f"Stary laptop ({old}): takie schodzą wolno (nowa oferta znika w tydzień w 5-23% przypadków, "
+                     "MacBook z M1 / M2 w ~40%), a większość z nich kosztuje poniżej 700 zł - progu, od którego baza "
+                     "zbiera laptopy, więc mediany pokazują tylko droższą część rynku. Szacunek w medianach = dolne "
+                     "10% cen aktywnych ofert - nie wyceniaj wyżej.")
     if found:
         lines.append("Popyt na ten model: " + demand_text(found) + ". Szacunek szybkiej sprzedaży w medianach to cena "
                      "ofert, które zeszły (≤ 3 dni od wystawienia albo potwierdzona sprzedaż), a nie mediana aktywnych "
@@ -318,6 +364,9 @@ def apply_market_rules(ev, offer, cfg, levels, span_days=None):
         ev["score_ai"] = ev.get("score_ai", ev["score"])
         ev.update(is_deal=False, score=min(ev["score"], 6.0))
         flags.append(f"Program: {limit[1]}; cena {cost:.0f} zł > {limit[0]} zł - trudno sprzedać, nie okazja")
+    old = old_reason(levels)
+    if old:
+        flags.append(f"Program: stary laptop ({old}) - takie schodzą wolno, wycena z dolnych 10% cen ofert")
     found = demand(levels, cfg) if demand_on(offer, cfg) and not low_demand(offer) else None
     if found is not None:
         return _apply_demand(ev, offer, cfg, levels, found, cost)
