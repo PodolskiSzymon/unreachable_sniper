@@ -598,10 +598,10 @@ SPEC_PLANS = {
 def spec_path(spec):
     if not spec:
         return None
+    if spec.get("line") and spec.get("chip"):
+        return "mac"                     # 20.11: MacBook najpierw (Intel z Radeon Pro nie miesza się z Windowsami)
     if spec.get("gpu"):
         return "gpu"
-    if spec.get("line") and spec.get("chip"):
-        return "mac"
     return "cpu" if spec.get("cpu_line") and spec.get("cpu_gen") else None
 
 

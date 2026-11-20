@@ -154,7 +154,11 @@ def old_laptop(offer, spec=None, cfg=None):
     if getattr(offer, "category", None) != "laptop":
         return None
     spec = spec or {}
-    if spec.get("gpu") or spec.get("chip"):
+    chip = spec.get("chip") or ""
+    if chip.startswith("intel"):                          # 20.11: MacBook z Intelem po roczniku
+        year = int(chip.split()[1])
+        return f"MacBook z Intelem ({year})" if year <= 2017 else None
+    if spec.get("gpu") or chip:
         return None
     if spec.get("cpu_gen") == OLD_CPU_GEN:
         return "MacBook z Intelem do 2017" if spec.get("line") else "laptop z procesorem Intel do 7. generacji"

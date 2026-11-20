@@ -38,6 +38,24 @@ CPU_PATTERNS = (
     re.compile(r"\b(celeron|pentium|athlon|snapdragon x\s*(?:elite|plus))\s*-?\s*([a-z]?\d{3,5}[a-z]?)?\b"),
 )
 CPU_FAMILY = re.compile(r"\b(?:intel\s*)?(?:core\s*)?(i[3579])\b(?![-\s]*\d)|\bryzen\s*([3579])\b(?!\s*\d{3})")
+# 2026-11-20: linia + generacja słownie („i5 11 gen”, „i7 10th gen”, „8. generacji i5”) → „i5 (11. gen)” - jak
+# analyzer/extract.py: cpu_gen_text.
+_GEN = r"(\d{1,2})\s*(?:th|st|nd|rd|\.|-?(?:ej|tej|ma|ta))?\s*(?:/\s*\d{1,2}\s*)?(?:gen\w*|generac\w*|generat\w*)"
+CPU_GEN_TEXT = (re.compile(r"\b(?:intel\s*)?(?:core\s*)?(i[3579])\b(?![-\s]*\d{3})[\s,/-]{0,3}(?:\w+\s+){0,2}?" + _GEN),
+                re.compile(r"\b" + _GEN + r"\s*(?:intel\s*)?(?:core\s*)?(i[3579])\b"))
+
+
+def cpu_gen_text(text):
+    """„i5 11 gen” → „i5 (11. gen)” (generacje 2-14), inaczej None."""
+    for n, pattern in enumerate(CPU_GEN_TEXT):
+        match = pattern.search(text or "")
+        if match:
+            line, gen = (match.group(1), match.group(2)) if n == 0 else (match.group(2), match.group(1))
+            if 2 <= int(gen) <= 14:
+                return f"{line} ({int(gen)}. gen)"
+    return None
+
+
 GPU_PATTERNS = (
     re.compile(r"\b(rtx)\s*(a\d{3,4}|\d{4})\s*(ti|super)?\b"),
     re.compile(r"\b(gtx)\s*(\d{3,4})\s*(ti|super)?\b"),
@@ -58,7 +76,9 @@ STORAGE_AFTER = re.compile(r"\b(?:ssd|nvme|dysk|disk)(?:\s*(?::|m\.?2|nvme|pcie|
 RAM_SIZES = (2, 4, 6, 8, 12, 16, 20, 24, 32, 36, 48, 64, 96, 128)
 _GPU_WITH_VRAM = re.compile(r"\b(?:rtx|gtx|rx|quadro|mx|arc)\s*a?\d{3,4}\s*(?:ti|super|xt|m)?\s*"
                             r"(?:(?:2|3|4|6|8|12)\s*gb\b)?")
-MACBOOK = re.compile(r"\bmac\s*book\s*(air|pro)?")
+# Jak analyzer/extract.py: MACBOOK (2026-11-20 z rocznikiem - MacBook z Intelem po roczniku).
+MACBOOK = re.compile(r"\bmac\s*book\s*(air|pro)?\s*(?:(1[3-6])(?:[.,]\d)?\s*(?:\"|”|''|cal\w*|inch\w*)?)?\s*"
+                     r"(?:\(?\s*(20[12]\d)\s*\)?)?")
 DEDICATED_GPU = re.compile(r"(rtx|gtx|rx|arc|quadro)\b")
 SSD_BUCKETS = ((160, 128), (300, 256), (600, 512), (1200, 1000), (2500, 2000))
 
@@ -138,17 +158,33 @@ def cpu_line_of(cpu, cpu_line=None):
     if not cpu:
         return None
     cpu = str(cpu).lower()
-    for pattern, fmt in ((r"(i[3579])-", "intel core {}"), (r"ultra ([579])", "intel core ultra {}"),
+    for pattern, fmt in ((r"(i[3579])(?:-| \()", "intel core {}"), (r"ultra ([579])", "intel core ultra {}"),
                          (r"ryzen ([3579])", "amd ryzen {}"), (r"apple (m\d)", "apple {}")):
         match = re.match(pattern, cpu)
         if match:
             return fmt.format(match.group(1))
+    # 2026-11-20: tanie linie razem, Snapdragon X osobno (jak analyzer/analysis.py: cpu_line_of)
+    if re.match(r"(celeron|pentium|intel processor n)", cpu):
+        return "intel celeron / pentium"
+    if cpu.startswith("athlon"):
+        return "amd athlon"
+    if cpu.startswith("snapdragon"):
+        return "snapdragon x"
     return cpu.split()[0]
 
 
 def cpu_generation(cpu):
     """Jak analyzer/guide.py: cpu_generation („i5-8350u” → „8–9 gen.”, „ryzen 5 5500u” → „4000–5000”)."""
     cpu = (cpu or "").lower()
+    m = re.match(r"i[3579] \((\d{1,2})\. gen\)", cpu)          # generacja słownie (cpu_gen_text)
+    if m:
+        gen = int(m.group(1))
+        return "do 7 gen." if gen <= 7 else "8–9 gen." if gen <= 9 else "10–11 gen." if gen <= 11 else "12+ gen."
+    if re.match(r"(celeron|pentium|athlon|intel processor)", cpu):
+        return "N100+" if re.search(r"\bn[1-3]\d\d\b", cpu) else "starsze"
+    m = re.match(r"snapdragon x\s*(elite|plus)?", cpu)
+    if m:
+        return f"x {m.group(1)}" if m.group(1) else "x"
     m = re.match(r"i[3579]-(\d{3,5})", cpu)
     if m:
         d = m.group(1)
@@ -161,6 +197,18 @@ def cpu_generation(cpu):
     return None
 
 
+def intel_mac_chip(model, cpu=""):
+    """MacBook z Intelem: rocznik z modelu → „intel 2019” (2020 tylko z procesorem Intel - bywa M1). Jak
+    analyzer/comparables.py: intel_mac_chip."""
+    match = re.search(r"\b(20(?:0[6-9]|1\d|20))\b", model or "")
+    if not match or re.search(r"\bapple\b|\bm[1-5]\b", cpu or ""):
+        return None
+    year = int(match.group(1))
+    if year == 2020 and not re.match(r"(i[3579]|intel|core)", cpu or ""):
+        return None
+    return f"intel {year}"
+
+
 def normalize(model, cpu, cpu_line, gpu, ram_gb, storage_gb):
     """Jak analyzer/comparables.py: laptop_spec → słownik albo None (za mało danych do median)."""
     gpu = (gpu or "").lower().strip()
@@ -169,9 +217,10 @@ def normalize(model, cpu, cpu_line, gpu, ram_gb, storage_gb):
     chip = re.search(r"apple (m\d(?: (?:pro|max|ultra))?)", cpu)
     line = ("macbook air" if "air" in model else "macbook pro" if "pro" in model else None) \
         if "macbook" in model or chip else None
+    chip = chip.group(1) if chip else intel_mac_chip(model, cpu) if line else None
     spec = {"gpu": gpu if DEDICATED_GPU.match(gpu) else None,
             "cpu_line": cpu_line_of(cpu or None, cpu_line), "cpu_gen": cpu_generation(cpu) if cpu else None,
-            "chip": chip.group(1) if chip else None, "line": line,
+            "chip": chip, "line": line,
             "ram": int(ram_gb) if ram_gb else None, "ssd": ssd_bucket(storage_gb)}
     if spec["cpu_line"] and spec["cpu_line"].startswith("intel core ultra"):
         spec["cpu_gen"] = "core ultra"
@@ -185,10 +234,10 @@ def laptop_spec(title, description="", attributes=None):
     attrs = attributes or {}
     t, d = norm(title), norm(description)
     model = norm(attrs.get("model_nav") or attrs.get("model") or "")
-    if not model:
-        match = MACBOOK.search(t)
-        model = " ".join(p for p in ("macbook", match.group(1)) if p) if match else ""
-    cpu = _cpu(t) or _cpu(d)
+    match = MACBOOK.search(t)
+    if match and (not model or (match.group(3) and "macbook" in model and not re.search(r"\b20[12]\d\b", model))):
+        model = " ".join(p for p in ("macbook", *match.groups()) if p)    # rocznik z tytułu (jak analizator)
+    cpu = _cpu(t) or _cpu(d) or cpu_gen_text(t) or cpu_gen_text(d)
     cpu_line = attrs.get("computer_cpu_line")
     if not cpu and not cpu_line:
         for text in (t, d):
@@ -213,14 +262,18 @@ def spec_from_ai(found, title=""):
     if re.match(r"m[1-5]\b", cpu_text):
         cpu_text = "apple " + cpu_text
     gpu = _gpu(gpu_text) or ("integrated" if "zintegrowan" in gpu_text or "integrated" in gpu_text else None)
-    cpu = _cpu(cpu_text if "apple" in cpu_text else cpu_text.replace("apple", "")) or _cpu(f"{t} {cpu_text}")
+    cpu = _cpu(cpu_text if "apple" in cpu_text else cpu_text.replace("apple", "")) or _cpu(f"{t} {cpu_text}") \
+        or cpu_gen_text(cpu_text)                         # 20.11: „Intel Core i5 11. gen” bez dokładnego modelu
     cpu_line = None
     if not cpu:
         match = CPU_FAMILY.search(cpu_text)
         cpu_line = (f"intel core {match.group(1)}" if match.group(1) else f"amd ryzen {match.group(2)}") \
             if match else None
     match = MACBOOK.search(t)
-    model = " ".join(p for p in ("macbook", match.group(1)) if p) if match else ""
+    model = " ".join(p for p in ("macbook", *match.groups()) if p) if match else ""
+    year = found.get("model_year")
+    if "macbook" in model and isinstance(year, int) and 2006 <= year <= 2026 and not re.search(r"\b20[12]\d\b", model):
+        model += f" {year}"                               # 20.11: rocznik MacBooka od AI (numer A…, zdjęcia)
 
     def number(key, low, high):
         try:
@@ -266,8 +319,8 @@ def describe(spec):
     if not spec:
         return "-"
     parts = [gpu_name(spec["gpu"]) if spec.get("gpu") else None,
-             " ".join(x for x in (spec.get("line"), (spec.get("chip") or "").upper()) if x).replace("macbook", "MacBook")
-             .replace("air", "Air").replace("pro", "Pro") if spec.get("line") else None,
+             " ".join(x for x in (spec.get("line"), (spec.get("chip") or "").upper().replace("INTEL", "Intel")) if x)
+             .replace("macbook", "MacBook").replace("air", "Air").replace("pro", "Pro") if spec.get("line") else None,
              (spec.get("cpu_line") or "").title().replace("Amd", "AMD") + (f" {spec['cpu_gen']}" if spec.get("cpu_gen")
                                                                          else "") if spec.get("cpu_line") else None,
              f"{spec['ram']} GB RAM" if spec.get("ram") else None, ssd_label(spec.get("ssd"))]

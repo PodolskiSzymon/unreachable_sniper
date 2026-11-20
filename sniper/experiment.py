@@ -92,15 +92,18 @@ LAPTOP_SPECS_FIELD = {
     "properties": {
         "gpu": _nullable("string", "Karta graficzna, np. 'RTX 4060'; 'zintegrowana', gdy brak dedykowanej; null, gdy "
                          "nie wiadomo."),
-        "cpu": _nullable("string", "Procesor, np. 'Intel Core i5-1135G7', 'Ryzen 7 5800H', 'Apple M1 Pro'; null, gdy "
-                         "nie wiadomo."),
+        "cpu": _nullable("string", "Procesor, np. 'Intel Core i5-1135G7', 'Ryzen 7 5800H', 'Apple M1 Pro', "
+                         "'Celeron N4020', 'Snapdragon X Elite'; bez dokładnego modelu chociaż linia i generacja: "
+                         "'Intel Core i5 11. gen'; null, gdy nie wiadomo."),
+        "model_year": _nullable("integer", "MacBook: rocznik modelu (z tytułu, opisu, numeru A…, np. A2141 = 2019); "
+                                "inne laptopy null."),
         "ram_gb": _nullable("integer", "RAM w GB."),
         "ssd_gb": _nullable("integer", "Dysk w GB (1 TB = 1000)."),
         "source": {"type": "string", "enum": ["tekst", "zdjęcia", "numer modelu", "brak"],
                    "description": "Skąd specyfikacja: tytuł / opis, zdjęcia (naklejki, zrzuty ustawień, BIOS), dokładny "
                                   "numer modelu, brak."},
     },
-    "required": ["gpu", "cpu", "ram_gb", "ssd_gb", "source"],
+    "required": ["gpu", "cpu", "model_year", "ram_gb", "ssd_gb", "source"],
     "additionalProperties": False,
 }
 LAPTOP_SCHEMA = {
@@ -111,8 +114,10 @@ LAPTOP_SCHEMA = {
 LAPTOP_RULES = """
 E. Laptop: mediany w <mediany> są po SPECYFIKACJI (karta graficzna / procesor + generacja / RAM / dysk), nie po \
 modelu. W laptop_specs podaj specyfikację TEJ sztuki - z tytułu, opisu, zdjęć (naklejki, zrzuty ustawień, BIOS) albo \
-z dokładnego numeru modelu (np. 15ACH6H, 14-ce3002nh); source = skąd. Nie zgaduj z samej nazwy serii (Legion 5, \
-IdeaPad, Pavilion) - wtedy null i source = "brak". Gdy median brak albo specyfikacja różni się od tej z median (np. na \
+z dokładnego numeru modelu (np. 15ACH6H, 14-ce3002nh, X515MA, Latitude 5320 → zwykle i5 11. gen); source = skąd. \
+Bez dokładnego modelu procesora podaj chociaż linię i generację („Intel Core i5 11. gen”) - wystarczy do median. \
+MacBook z Intelem: podaj model_year (rocznik decyduje o cenie). Nie zgaduj z samej nazwy serii (Legion 5, IdeaPad, \
+Pavilion) - wtedy null i source = "brak". Gdy median brak albo specyfikacja różni się od tej z median (np. na \
 zdjęciu naklejka RTX, a mediany dla zintegrowanej grafiki), program policzy mediany dla Twojej specyfikacji i poprosi \
 o ponowną ocenę."""
 
