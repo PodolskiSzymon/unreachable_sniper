@@ -49,6 +49,12 @@ def build_deal_message(offer, evaluation, topic, priority=5, attach_photo=True):
                      f"{_pln(ev.get('potential_profit_pln'))}{margin}{days}")
         if ev.get("market_value_pln") is not None:
             lines.append(f"Sprzedam za ~{_pln(ev.get('market_value_pln'))}")
+    parts = ev.get("pc_parts") or {}
+    if ev.get("route") == "części" and parts:
+        # 2026-11-20: komputer opłaca się rozebrać (zysk z części ≥ zysk z całości + SNIPER_PC_PARTS_EXTRA)
+        whole = f" (całość ~{_pln(parts['whole_profit'])})" if parts.get("whole_profit") is not None else ""
+        lines.append(f"🔧 Kup NA CZĘŚCI: ~{_pln(parts.get('parts_value'))} w {parts.get('n_listings')} ogłoszeniach, "
+                     f"zysk ~{_pln(parts.get('parts_profit'))}{whole}")
     market = ev.get("market") or {}
     if market.get("text"):
         # Popyt (2026-11-16): klasa modelu z danych i cena wystawienia, po której schodzi.

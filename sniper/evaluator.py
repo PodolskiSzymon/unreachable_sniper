@@ -1147,7 +1147,7 @@ class OfferEvaluator:
         """Bez wytycznych dla kategorii albo za drogo wg tabeli / podobnych ofert → powód pominięcia (zero kosztów)."""
         self.route(offer)                      # najpierw kategoria z tytułu (oferta w złym katalogu)
         category = getattr(offer, "category", None)
-        if category is not None and self.guides.path(category) is None:
+        if category is not None and self.guides.path(category) is None and not self.spec_mode(offer):
             return f"brak wytycznych dla kategorii {category}"
         reason = self.guides.gate(category, offer.title, _offer_price(offer), getattr(self.cfg, "price_gate", 0),
                                   getattr(offer, "condition", None))
@@ -1160,6 +1160,13 @@ class OfferEvaluator:
             estimates = [lv["estimate"] for lv in self.levels(offer) if lv.get("estimate")]
             factor = value_factor(self.levels(offer), offer, self.cfg)       # stary laptop: × 1,0 (2026-11-18)
             limit = rule_max_buy(max(estimates) * factor, self.cfg) if estimates and factor else None
+            route = self.pc_route(offer, max(estimates) * factor if estimates and factor else None)
+            parts_limit = (route or {}).get("parts_max_buy")
+            if parts_limit is not None and (limit is None or parts_limit > limit):
+                if cost is not None and cost > parts_limit:
+                    return (f"za drogo także na części: {cost:.0f} zł > max zakup {parts_limit:.0f} zł "
+                            f"(części ~{route['parts_value']} zł w {route['n_listings']} ogłoszeniach)")
+                return None
             if limit is not None and cost is not None and cost > limit:
                 from .specs import describe as spec_text
                 return (f"za drogo wg median specyfikacji ({spec_text(self.spec(offer))}): {cost:.0f} zł > max zakup "
@@ -1213,6 +1220,8 @@ class OfferEvaluator:
                             "idą bez AI. Uruchom w analizatorze: python -m analyzer auto --force (kopiuje plik).", path)
             if self.spec_mode(offer) and not self.spec(offer):
                 return None            # specyfikacji nie ma w tekście - AI odczyta ją z opisu / zdjęć / numeru modelu
+            if (self.pc_route(offer) or {}).get("parts_max_buy") is not None:
+                return None            # komputer bez median całości, ale z wycenionymi częściami
             if not self.levels(offer) and 3.0 < self.notify_floor():
                 return "brak danych rynku (żadnej mediany w bazie) - ocena i tak najwyżej 3"
             return None
@@ -1231,11 +1240,32 @@ class OfferEvaluator:
         return category != "laptop" or self.spec_mode(offer)
 
     def spec_mode(self, offer):
-        """Laptop wyceniany po specyfikacji (karta / procesor / RAM / dysk), nie po słowach tytułu."""
-        if getattr(self.cfg, "eval_mode", "zwykly") != "mediany" or getattr(offer, "category", None) != "laptop":
+        """Laptop (i od 2026-11-20 komputer stacjonarny) wyceniany po specyfikacji (karta / procesor / RAM / dysk), nie
+        po słowach tytułu."""
+        category = getattr(offer, "category", None)
+        if getattr(self.cfg, "eval_mode", "zwykly") != "mediany" or category not in ("laptop", "desktop"):
             return False
         comparables = getattr(self, "comparables", None)
-        return bool(comparables is not None and comparables.has_specs())
+        if comparables is None:
+            return False
+        return bool(comparables.has_specs() if category == "laptop" else comparables.has_desktop_specs())
+
+    def spec_table(self, offer):
+        return "desktop_specs" if getattr(offer, "category", None) == "desktop" else "laptop_specs"
+
+    def pc_route(self, offer, whole_value=None):
+        """Komputer: wartość części i wybór całość / części (sniper/pc.py) - raz na ofertę (części); None poza PC."""
+        if getattr(offer, "category", None) != "desktop" or getattr(self, "comparables", None) is None:
+            return None
+        cache = self.__dict__.setdefault("_pc_parts", {})
+        if offer.id not in cache:
+            if len(cache) > 500:
+                cache.clear()
+            from .pc import part_values, parts
+            found = parts(offer.title, getattr(offer, "description", "") or "", getattr(offer, "attributes", None) or {})
+            cache[offer.id] = part_values(found, self.comparables, self.cfg)
+        from .pc import routes
+        return routes(cache[offer.id], _offer_price(offer), self.cfg, whole_value)
 
     def spec(self, offer):
         """Specyfikacja laptopa z tytułu, opisu i formularza (sniper/specs.py) - raz na ofertę; None = nieznana."""
@@ -1244,6 +1274,8 @@ class OfferEvaluator:
             if len(cache) > 500:
                 cache.clear()
             from .specs import laptop_spec
+            if getattr(offer, "category", None) == "desktop":
+                from .pc import desktop_spec as laptop_spec        # komputer - te same klucze, inne wzory
             cache[offer.id] = laptop_spec(offer.title, getattr(offer, "description", "") or "",
                                           getattr(offer, "attributes", None) or {})
         return cache[offer.id]
@@ -1292,8 +1324,8 @@ class OfferEvaluator:
                 cache[offer.id] = []
             elif self.spec_mode(offer):
                 spec = self.spec(offer)
-                cache[offer.id] = self._age(offer, spec, comparables.spec_levels(spec, getattr(offer, "condition",
-                                                                                                None)))
+                cache[offer.id] = self._age(offer, spec, comparables.spec_levels(
+                    spec, getattr(offer, "condition", None), self.spec_table(offer)))
             else:
                 cache[offer.id] = comparables.levels(getattr(offer, "category", None), lookup_title(offer),
                                                      getattr(offer, "condition", None))
@@ -1486,7 +1518,7 @@ class OfferEvaluator:
                     evaluation.setdefault("red_flags", []).append(
                         f"Program: specyfikację ({evaluation['spec']}) rozpoznało AI ({self._spec_from_ai[offer.id]}) "
                         f"- sprawdź ją przed zakupem")
-            finish_medians(evaluation, offer, self.cfg, levels, self.span_days())
+            finish_medians(evaluation, offer, self.cfg, levels, self.span_days(), pc=self.pc_route)
         else:
             enforce_profit_rule(evaluation, offer, self.cfg, comps)
             cap_without_market_data(evaluation, offer, self.guides, getattr(self.cfg, "no_data_max_score", 7.0),
@@ -1557,7 +1589,8 @@ class OfferEvaluator:
         merged = merge(text_spec, spec_from_ai(found, offer.title))
         if not merged or same(merged, text_spec) or (self.levels(offer) and not significant(text_spec, merged)):
             return None
-        levels = self._age(offer, merged, self.comparables.spec_levels(merged, getattr(offer, "condition", None)))
+        levels = self._age(offer, merged, self.comparables.spec_levels(merged, getattr(offer, "condition", None),
+                                                                        self.spec_table(offer)))
         if not levels:
             return None
         done.add(offer.id)

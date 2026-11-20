@@ -112,8 +112,8 @@ LAPTOP_SCHEMA = {
     "required": [*MEDIANS_SCHEMA["required"], "laptop_specs"],
 }
 LAPTOP_RULES = """
-E. Laptop: mediany w <mediany> są po SPECYFIKACJI (karta graficzna / procesor + generacja / RAM / dysk), nie po \
-modelu. W laptop_specs podaj specyfikację TEJ sztuki - z tytułu, opisu, zdjęć (naklejki, zrzuty ustawień, BIOS) albo \
+E. Laptop / komputer stacjonarny: mediany w <mediany> są po SPECYFIKACJI (karta graficzna / procesor + generacja / \
+RAM / dysk), nie po modelu. W laptop_specs podaj specyfikację TEJ sztuki - z tytułu, opisu, zdjęć (naklejki, zrzuty ustawień, BIOS) albo \
 z dokładnego numeru modelu (np. 15ACH6H, 14-ce3002nh, X515MA, Latitude 5320 → zwykle i5 11. gen); source = skąd. \
 Bez dokładnego modelu procesora podaj chociaż linię i generację („Intel Core i5 11. gen”) - wystarczy do median. \
 MacBook z Intelem: podaj model_year (rocznik decyduje o cenie). Nie zgaduj z samej nazwy serii (Legion 5, IdeaPad, \
@@ -155,14 +155,19 @@ def cheap_guard(ev, offer, cost, sale):
     return ev
 
 
-def finish_medians(ev, offer, cfg, levels, span_days=None):
+def finish_medians(ev, offer, cfg, levels, span_days=None, pc=None):
     """Program po AI: brak w medianach → nie okazja; reguła zysku i przycięcie do wybranej mediany; premia PL;
-    reguły rynku (sniper/market.py: „bez pudełka” taniej, mały rynek, wolna rotacja)."""
+    reguły rynku (sniper/market.py: „bez pudełka” taniej, mały rynek, wolna rotacja). pc(offer, wartość całości) -
+    komputer: wycena na części i wybór całość / części (sniper/pc.py, 2026-11-20)."""
     from .market import apply_market_rules, price_factor, value_factor
     if not levels or not ev.get("in_medians"):
         if ev.get("is_deal") or ev["score"] > 3:
             ev["score_ai"] = ev["score"]
         ev.update(is_deal=False, score=min(ev["score"], 3.0))
+        route = pc(offer, None) if pc else None
+        if route and route.get("parts_value"):
+            from .pc import apply_parts
+            return apply_parts(ev, offer, cfg, route)        # brak median całości - może na części
         ev.setdefault("red_flags", []).append("Program: brak przedmiotu w medianach – ignoruję")
         return ev
     used = ev.get("median_used")
@@ -181,6 +186,10 @@ def finish_medians(ev, offer, cfg, levels, span_days=None):
     enforce_profit_rule(ev, offer, cfg, comps)
     apply_pl_bonus(ev, offer, getattr(cfg, "pl_bonus", 0))
     apply_market_rules(ev, offer, cfg, levels, span_days)
+    route = pc(offer, ev.get("market_value_pln")) if pc else None
+    if route:
+        from .pc import apply_parts
+        apply_parts(ev, offer, cfg, route)
     from .extractor import purchase_cost
     return cheap_guard(ev, offer, purchase_cost(offer), ev.get("market_value_pln"))
 

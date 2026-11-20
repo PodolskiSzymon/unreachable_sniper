@@ -187,6 +187,8 @@ class Comparables:
             self._rows, self._mtime = int(row[0]) if row else 0, mtime
             self._specs = bool(self._conn.execute(
                 "SELECT 1 FROM sqlite_master WHERE type='table' AND name='laptop_specs'").fetchone())
+            self._desktop = bool(self._conn.execute(                 # komputery (analizator od 2026-11-20)
+                "SELECT 1 FROM sqlite_master WHERE type='table' AND name='desktop_specs'").fetchone())
             # Stan (nowy / używany) - analizator od 2026-11-03; starszy plik: bez filtra stanu.
             self._cond = "cond" in [c[0] for c in self._conn.execute("SELECT * FROM offers LIMIT 0").description]
             self._spec_cond = self._specs and "cond" in [
@@ -229,10 +231,21 @@ class Comparables:
         except sqlite3.Error:
             return False
 
-    def spec_levels(self, spec, condition=None):
-        """Mediany laptopów po specyfikacji → lista statystyk jak levels() (+ "kind": "spec"); pusta, gdy brak."""
+    def has_desktop_specs(self):
+        """Czy plik ma tabelę komputerów stacjonarnych po specyfikacji (analizator od 2026-11-20)."""
+        try:
+            return self._db() is not None and getattr(self, "_desktop", False)
+        except sqlite3.Error:
+            return False
+
+    def spec_levels(self, spec, condition=None, table="laptop_specs"):
+        """Mediany laptopów (albo komputerów: table="desktop_specs") po specyfikacji → lista statystyk jak levels()
+        (+ "kind": "spec"); pusta, gdy brak."""
         path = spec_path(spec)
-        if not path or not self.has_specs():
+        if table not in ("laptop_specs", "desktop_specs"):
+            raise ValueError(table)
+        ready = self.has_specs() if table == "laptop_specs" else self.has_desktop_specs()
+        if not path or not ready:
             return []
         out, seen = [], set()
         try:
@@ -246,7 +259,7 @@ class Comparables:
                 if group:
                     where += " AND cond = ?"
                     params.append(group)
-                rows = db.execute(f"SELECT price, gone FROM laptop_specs WHERE {where}", params).fetchall()
+                rows = db.execute(f"SELECT price, gone FROM {table} WHERE {where}", params).fetchall()
                 active = [p for p, g in rows if not g]
                 gone = [p for p, g in rows if g]
                 if len(active) + len(gone) < self.min_offers:

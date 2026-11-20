@@ -480,6 +480,14 @@ class AiConfig:
     # AI najwyżej szacunek × LAPTOP_VALUE_FACTOR (26% szybkich sprzedaży było ≥ 1,1 × szacunek). false = jak dawniej.
     laptop_value_rules: bool = _env_bool("SNIPER_LAPTOP_VALUE_RULES", True)
     laptop_value_factor: float = _env_float("SNIPER_LAPTOP_VALUE_FACTOR", 1.1)
+    # Komputery (2026-11-20, sniper/pc.py): wycena po specyfikacji + na części. Na części tylko, gdy zysk z części
+    # ≥ zysk z całości + PC_PARTS_EXTRA (każda część = osobne ogłoszenie, promowanie, więcej pracy); obudowa i płyta
+    # bez median - stałe (użytkownik: obudowa ~100-300 zł), zasilacz wg mocy, HDD za TB.
+    pc_parts_extra: float = _env_float("SNIPER_PC_PARTS_EXTRA", 200.0)
+    pc_case_pln: float = _env_float("SNIPER_PC_CASE_PLN", 150.0)
+    pc_psu_unknown: float = _env_float("SNIPER_PC_PSU_UNKNOWN_PLN", 120.0)
+    pc_mobo_unknown: float = _env_float("SNIPER_PC_MOBO_UNKNOWN_PLN", 150.0)
+    pc_hdd_tb: float = _env_float("SNIPER_PC_HDD_TB_PLN", 50.0)
 
     # Mail tylko gdy ocena >= min_score; notify_all=true -> mail o każdej ofercie (z oceną albo bez).
     min_score: float = _env_float("SNIPER_AI_MIN_SCORE", 7.0)
