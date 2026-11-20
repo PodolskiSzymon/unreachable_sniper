@@ -238,6 +238,23 @@ class Comparables:
         except sqlite3.Error:
             return False
 
+    def code_spec(self, *texts):
+        """Baza modeli (analizator od 2026-11-20, tabela model_codes): pierwszy znany kod modelu z tekstów →
+        {"cpu", "gpu", "code"} albo None."""
+        from .specs import model_codes
+        try:
+            db = self._db()
+            if db is None or not db.execute("SELECT 1 FROM sqlite_master WHERE name = 'model_codes'").fetchone():
+                return None
+            for text in texts:
+                for code in model_codes(text):
+                    row = db.execute("SELECT cpu, gpu FROM model_codes WHERE code = ?", (code,)).fetchone()
+                    if row:
+                        return {"cpu": row[0], "gpu": row[1], "code": code}
+        except sqlite3.Error:
+            return None
+        return None
+
     def spec_levels(self, spec, condition=None, table="laptop_specs"):
         """Mediany laptopów (albo komputerów: table="desktop_specs") po specyfikacji → lista statystyk jak levels()
         (+ "kind": "spec"); pusta, gdy brak."""

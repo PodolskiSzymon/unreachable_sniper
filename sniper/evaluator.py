@@ -1276,8 +1276,19 @@ class OfferEvaluator:
             from .specs import laptop_spec
             if getattr(offer, "category", None) == "desktop":
                 from .pc import desktop_spec as laptop_spec        # komputer - te same klucze, inne wzory
-            cache[offer.id] = laptop_spec(offer.title, getattr(offer, "description", "") or "",
-                                          getattr(offer, "attributes", None) or {})
+            spec = laptop_spec(offer.title, getattr(offer, "description", "") or "",
+                               getattr(offer, "attributes", None) or {})
+            comparables = getattr(self, "comparables", None)
+            if getattr(offer, "category", None) == "laptop" and comparables is not None:
+                # 20.11: baza modeli - kod modelu z tytułu (15ITL6, X515MA, Latitude 5320) uzupełnia procesor / kartę
+                from .specs import laptop_fields, with_code
+                hint = comparables.code_spec(offer.title, (getattr(offer, "description", "") or "")[:400])
+                spec, code = with_code(spec, laptop_fields(offer.title, getattr(offer, "description", "") or "",
+                                                           getattr(offer, "attributes", None) or {}), hint) \
+                    if hint else (spec, None)
+                if code:
+                    self.__dict__.setdefault("_spec_code", {})[offer.id] = code
+            cache[offer.id] = spec
         return cache[offer.id]
 
     def task_for(self, offer):

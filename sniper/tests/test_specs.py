@@ -359,3 +359,53 @@ def test_ai_spec_generation_year_and_old_intel_mac():
     offer = SimpleNamespace(category="laptop", title="MacBook Air 13 2015 8GB 256GB")
     assert old_mac["chip"] == "intel 2015" and old_laptop(offer, old_mac) == "MacBook z Intelem (2015)"
     assert old_laptop(offer, mac) is None                              # 2019 - nie „stary”
+
+
+# Te same przypadki w analyse_data/analyzer/tests/test_specdb.py.
+MODEL_CODE_PARITY = [
+    ("Lenovo IdeaPad 3 15ITL6 i5", ["15itl6"]),
+    ("Asus X515MA Celeron", ["x515ma"]),
+    ("Acer Nitro 5 AN515-58 RTX 3050", ["an515-58"]),
+    ("Dell Latitude 5320 i5", ["latitude5320"]),
+    ("HP EliteBook 840 G5", ["elitebook840g5"]),
+    ("HP 250 G8 i3", ["250g8"]),
+    ("Lenovo ThinkPad T480", ["thinkpadt480"]),
+    ("Asus TUF FX506HC RTX3050 16GB 512GB", ["fx506hc"]),
+    ("Laptop RTX 3060 16 GB 512gb i7-12700h", []),
+]
+CODE_FILL_PARITY = [
+    ("Lenovo IdeaPad 3 15ITL6 8GB 512GB", {"cpu": "i5-1135g7", "gpu": None, "code": "15itl6"},
+     {"gpu": None, "cpu_line": "intel core i5", "cpu_gen": "10–11 gen.", "chip": None, "line": None, "ram": 8,
+      "ssd": 512}),
+    ("Asus TUF FX506HC 16GB", {"cpu": "i5-11400h", "gpu": "rtx 3050", "code": "fx506hc"},
+     {"gpu": "rtx 3050", "cpu_line": "intel core i5", "cpu_gen": "10–11 gen.", "chip": None, "line": None, "ram": None,
+      "ssd": None}),                                              # samo „16GB” bez dysku - nie wiadomo, czy RAM
+    ("Lenovo Legion 5 i7-10750H RTX 2060 16GB", {"cpu": "i5-1135g7", "gpu": None, "code": "x"},
+     {"gpu": "rtx 2060", "cpu_line": "intel core i7", "cpu_gen": "10–11 gen.", "chip": None, "line": None, "ram": None,
+      "ssd": None}),
+]
+
+
+def test_model_codes_and_code_fill_parity():
+    from sniper.specs import laptop_fields, model_codes, with_code
+    for text, expected in MODEL_CODE_PARITY:
+        assert model_codes(text) == expected, text
+    for title, hint, expected in CODE_FILL_PARITY:
+        assert with_code(laptop_spec(title, ""), laptop_fields(title, ""), hint)[0] == expected, title
+
+
+def test_evaluator_uses_model_codes_from_comparables(tmp_path):
+    """Laptop bez procesora w tekście („Lenovo IdeaPad 3 15ITL6 8GB 256GB”) → kod z bazy modeli → mediany i5 10-11 gen."""
+    _setup(tmp_path)
+    db = sqlite3.connect(tmp_path / "guides" / "comparables.db")
+    db.executescript("CREATE TABLE model_codes (code TEXT PRIMARY KEY, cpu TEXT, gpu TEXT);"
+                     "INSERT INTO model_codes VALUES ('15itl6', 'i5-1135g7', NULL);")
+    db.executemany("INSERT INTO laptop_specs VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                   [(None, "intel core i5", "10–11 gen.", None, None, 8, 256, 900 + 10 * i, 0) for i in range(12)])
+    db.commit()
+    db.close()
+    evaluator = OfferEvaluator(ai_cfg(tmp_path, eval_mode="mediany"), FakeNotifier(), client=FakeClient())
+    offer = laptop(id=41, category="laptop", title="Lenovo IdeaPad 3 15ITL6 8GB 256GB", description="")
+    spec = evaluator.spec(offer)
+    assert (spec["cpu_line"], spec["cpu_gen"], spec["ram"]) == ("intel core i5", "10–11 gen.", 8)
+    assert evaluator.levels(offer) and evaluator._spec_code[41] == "15itl6"

@@ -231,6 +231,11 @@ def normalize(model, cpu, cpu_line, gpu, ram_gb, storage_gb):
 
 def laptop_spec(title, description="", attributes=None):
     """Specyfikacja z tytułu, opisu i formularza Vinted (pierwsze źródło wygrywa, jak w analizatorze) albo None."""
+    return normalize(*laptop_fields(title, description, attributes))
+
+
+def laptop_fields(title, description="", attributes=None):
+    """Surowe pola (model, procesor, linia, karta, RAM, dysk) - jak kolumny `features` analizatora."""
     attrs = attributes or {}
     t, d = norm(title), norm(description)
     model = norm(attrs.get("model_nav") or attrs.get("model") or "")
@@ -250,7 +255,7 @@ def laptop_spec(title, description="", attributes=None):
     ram = ram if ram and ram <= 128 else (_ram(t, loose=True) or _ram(d))
     disk = _gb(attrs["computer_storage_capacity"]) if attrs.get("computer_storage_capacity") else None
     disk = disk if disk and disk >= 32 else (_storage(t, loose=True) or _storage(d))
-    return normalize(model, cpu, cpu_line, gpu, ram, disk)
+    return model, cpu, cpu_line, gpu, ram, disk
 
 
 def spec_from_ai(found, title=""):
@@ -331,3 +336,41 @@ def ssd_label(ssd):
     if not ssd:
         return None
     return {1000: "1 TB", 2000: "2 TB", 4000: "4 TB+"}.get(ssd, f"{ssd} GB")
+
+
+# 2026-11-20: kody modeli laptopów (baza modeli w analizatorze: analyzer/specdb.py → comparables.db `model_codes`).
+# TE SAME wzory co analyzer/specdb.py: model_codes (test MODEL_CODE_PARITY w obu repo).
+_LENOVO = r"\d{2}(?:itl|alc|iil|are|ada|ach|iah|iau|irh|imh|iml|ikb|isk|ast|ihu|ara|abr|apr|amn|aba|irl|iap|arh|aph|irx)\d{0,2}"
+MODEL_CODE = re.compile(
+    r"\b(" + _LENOVO +
+    r"|(?:an|a|sf|sp|sv|ph|pt|ex|en|ag|al|aspire\s?)\d{3}-\d{2,3}[a-z]?"
+    r"|n\d{2}[a-z]\d"
+    r"|(?:latitude|inspiron|vostro|precision|elitebook|probook|zbook)\s?\d{3,4}[a-z]?(?:\s?g\d{1,2})?"
+    r"|thinkpad\s?[a-z]\d{2,3}[a-z]?(?:\s?gen\s?\d)?"
+    r"|\d{2}s?-[a-z]{2}\d{1,4}"
+    r"|\d{3}\s?g\d{1,2}"
+    r"|[a-z]{1,2}\d{3}[a-z]{1,3})\b")
+_NOT_CODES = re.compile(r"^(?:rtx|gtx|mx|rx|i[3579]|m\d|ddr|gb|tb)\d|^\d{3}g[b]?$")
+
+
+def model_codes(text):
+    """Kody modeli z tekstu (małe litery, bez spacji) - kolejność wystąpienia, bez powtórzeń."""
+    out = []
+    for match in MODEL_CODE.finditer((text or "").lower()):
+        code = re.sub(r"\s+", "", match.group(1))
+        if _NOT_CODES.match(code) or code in out:
+            continue
+        out.append(code)
+    return out
+
+
+def with_code(spec, fields, hint):
+    """Specyfikacja uzupełniona z bazy modeli, gdy tekst nie dał ścieżki do median (karta / MacBook / procesor z
+    generacją): procesor z kodu (linia z niego), karta - dedykowana z tekstu albo z kodu; RAM, dysk, model z tekstu.
+    Jak analyzer/comparables.py: build (with_code). fields = laptop_fields(...). → (spec, kod albo None)."""
+    if not hint or (spec and (spec.get("gpu") or spec.get("chip") or spec.get("cpu_gen"))):
+        return spec, None
+    model, _cpu_text, _line, gpu, ram, disk = fields
+    gpu = gpu if gpu and DEDICATED_GPU.match(gpu) else hint.get("gpu")
+    found = normalize(model, hint.get("cpu"), None, gpu, ram, disk)
+    return (found, hint.get("code")) if found else (spec, None)
